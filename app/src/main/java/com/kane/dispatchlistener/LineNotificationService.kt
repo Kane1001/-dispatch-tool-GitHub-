@@ -18,10 +18,10 @@ class LineNotificationService : NotificationListenerService() {
         const val CHANNEL_NAME = "派車警示"
 
         // 你要監聽的群組關鍵字（可在 MainActivity 設定）
-        var targetGroupName = "Q77"
+        var targetGroupName = "♒️ʜᴄ海口-𝟔月調度室🏎️"
 
         // 觸發通知的關鍵字（符合任一個就通知）
-        var keywords = mutableListOf("西屯", "北屯", "南屯", "大里", "太平", "豐原")
+        var keywords = mutableListOf("西屯", "北屯", "南屯", "大里", "太平", "豐原", "高鐵", "彰化", "南投", "草屯", "伸港", "苗栗", "沙鹿", "清水", "大甲")
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
