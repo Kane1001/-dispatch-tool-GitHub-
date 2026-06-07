@@ -298,7 +298,8 @@ fun MainScreen() {
                             return@launch
                         }
                         val resolvedDest = convertChineseNum(buildDestination(order.address, order.raw))
-                        val mins = getRouteMinutes(lat, lon, order.address, order.raw)
+                        val rawMins = getRouteMinutes(lat, lon, order.address, order.raw)
+                        val mins = if (rawMins != null && rawMins <= 1) 3 else rawMins
                         val report = buildReport(order.raw, mins, order.reserveTime)
                         OrderQueue.update(order.id, mins,
                             if (mins != null) OrderStatus.DONE else OrderStatus.FAILED, report, resolvedDest)
