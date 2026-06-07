@@ -44,7 +44,9 @@ class LineNotificationService : NotificationListenerService() {
         val matched = keywords.any { text.contains(it) }
         if (!matched) return
 
-        // 觸發高優先通知
+        // 加入訂單列並觸發通知
+        val chatId = extras.getString("line.chat.id")
+        OrderQueue.add(text, chatId, sbn.notification.contentIntent)
         showAlert(title, text)
     }
 
@@ -65,7 +67,6 @@ class LineNotificationService : NotificationListenerService() {
 
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-            putExtra("order_text", text)
         }
 
         val pendingIntent = PendingIntent.getActivity(

@@ -16,14 +16,15 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -33,8 +34,10 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -57,23 +60,22 @@ import com.kane.dispatchlistener.ui.theme.DispatchListenerTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
-import kotlin.coroutines.resume
+import androidx.compose.runtime.snapshotFlow
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
+import kotlin.coroutines.resume
 
 const val MAPS_API_KEY = "AIzaSyBV2J4zwqtWexO3gFg2UAEDL6YuSauSHm0"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val orderFromNotification = intent.getStringExtra("order_text") ?: ""
         setContent {
             DispatchListenerTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    MainScreen(initialOrder = orderFromNotification)
+                    MainScreen()
                 }
             }
         }
@@ -82,7 +84,6 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        recreate()
     }
 }
 
@@ -98,7 +99,6 @@ fun parseAddress(orderText: String): String? {
         if (numberSuffix.matches(p)) continue
         if (addrPattern.containsMatchIn(p)) return p
     }
-    // fallback: 地標名稱
     for (p in parts) {
         if (pureNumber.containsMatchIn(p)) continue
         if (numberSuffix.matches(p)) continue
@@ -148,28 +148,19 @@ suspend fun getRouteMinutes(originLat: Double, originLon: Double, destination: S
     return withContext(Dispatchers.IO) {
         try {
             val dest = convertChineseNum(buildDestination(destination))
-            val originStr = "$originLat,$originLon"
             val url = "https://maps.googleapis.com/maps/api/distancematrix/json" +
-                    "?origins=${encode(originStr)}" +
+                    "?origins=${encode("$originLat,$originLon")}" +
                     "&destinations=${encode(dest)}" +
                     "&mode=driving" +
                     "&language=zh-TW" +
                     "&key=$MAPS_API_KEY"
-            val client = OkHttpClient()
-            val request = Request.Builder().url(url).build()
-            val response = client.newCall(request).execute()
+            val response = OkHttpClient().newCall(Request.Builder().url(url).build()).execute()
             val body = response.body?.string() ?: return@withContext null
-            android.util.Log.d("DispatchAPI", "response: $body")
-            val json = JSONObject(body)
-            val element = json
-                .getJSONArray("rows")
-                .getJSONObject(0)
-                .getJSONArray("elements")
-                .getJSONObject(0)
-            val status = element.getString("status")
-            if (status != "OK") return@withContext null
+            val element = JSONObject(body)
+                .getJSONArray("rows").getJSONObject(0)
+                .getJSONArray("elements").getJSONObject(0)
+            if (element.getString("status") != "OK") return@withContext null
             val seconds = element.getJSONObject("duration").getInt("value")
-            // 尖峰時段 +2 分鐘
             val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
             val buffer = if ((hour in 7..8) || (hour in 17..18)) 2 else 0
             (seconds / 60) + buffer
@@ -188,8 +179,9 @@ fun buildReport(orderText: String, mins: Int?, reserveTime: String?): String {
         mins == null -> "報單"
         reserveTime != null -> {
             val now = java.util.Calendar.getInstance()
-            val arriveMs = System.currentTimeMillis() + mins * 60 * 1000L
-            val arrive = java.util.Calendar.getInstance().apply { timeInMillis = arriveMs }
+            val arrive = java.util.Calendar.getInstance().apply {
+                timeInMillis = System.currentTimeMillis() + mins * 60 * 1000L
+            }
             val (rh, rm) = reserveTime.split(":").map { it.toInt() }
             val reserve = java.util.Calendar.getInstance().apply {
                 set(java.util.Calendar.HOUR_OF_DAY, rh)
@@ -205,16 +197,15 @@ fun buildReport(orderText: String, mins: Int?, reserveTime: String?): String {
 }
 
 @Composable
-fun MainScreen(initialOrder: String = "") {
+fun MainScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val orders by OrderQueue.orders.collectAsState()
+    val dispatchedIds = remember { mutableSetOf<Long>() }
+
     var groupName by remember { mutableStateOf(LineNotificationService.targetGroupName) }
     var keywordInput by remember { mutableStateOf(LineNotificationService.keywords.joinToString("、")) }
-    var orderText by remember { mutableStateOf(initialOrder) }
-    var reportText by remember { mutableStateOf("") }
     var isListening by remember { mutableStateOf(false) }
-    var isLoading by remember { mutableStateOf(false) }
-    var statusMsg by remember { mutableStateOf("") }
     var currentLat by remember { mutableStateOf<Double?>(null) }
     var currentLon by remember { mutableStateOf<Double?>(null) }
     var locationLabel by remember { mutableStateOf("尚未定位") }
@@ -224,13 +215,18 @@ fun MainScreen(initialOrder: String = "") {
     val locationPermLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) {
+        if (!granted) locationLabel = "需要定位權限"
+    }
+
+    fun requestLocation() {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
+            == PackageManager.PERMISSION_GRANTED) {
             scope.launch {
                 try {
+                    locationLabel = "定位中..."
                     val loc = suspendCancellableCoroutine<Location?> { cont ->
                         val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 0)
-                            .setMaxUpdates(1)
-                            .build()
+                            .setMaxUpdates(1).build()
                         val callback = object : LocationCallback() {
                             override fun onLocationResult(result: LocationResult) {
                                 fusedLocationClient.removeLocationUpdates(this)
@@ -254,27 +250,6 @@ fun MainScreen(initialOrder: String = "") {
                 }
             }
         } else {
-            locationLabel = "需要定位權限"
-        }
-    }
-
-    fun requestLocation() {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
-            == PackageManager.PERMISSION_GRANTED) {
-            scope.launch {
-                try {
-                    locationLabel = "定位中..."
-                    val loc: Location = fusedLocationClient
-                        .getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
-                        .await()
-                    currentLat = loc.latitude
-                    currentLon = loc.longitude
-                    locationLabel = "%.6f, %.6f".format(loc.latitude, loc.longitude)
-                } catch (e: Exception) {
-                    locationLabel = "定位失敗"
-                }
-            }
-        } else {
             locationPermLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
         }
     }
@@ -284,22 +259,64 @@ fun MainScreen(initialOrder: String = "") {
         requestLocation()
     }
 
+    // 自動計算：GPS 或訂單任一更新就重新觸發
+    LaunchedEffect(Unit) {
+        snapshotFlow { currentLat to orders }.collect { (lat, orderList) ->
+            if (lat == null) return@collect
+            val lon = currentLon ?: return@collect
+            orderList.filter { it.status == OrderStatus.CALCULATING && it.id !in dispatchedIds }
+                .forEach { order ->
+                    dispatchedIds.add(order.id)
+                    scope.launch {
+                        if (order.address == null) {
+                            OrderQueue.update(order.id, null, OrderStatus.FAILED, "")
+                            return@launch
+                        }
+                        val mins = getRouteMinutes(lat, lon, order.address)
+                        val report = buildReport(order.raw, mins, order.reserveTime)
+                        OrderQueue.update(order.id, mins,
+                            if (mins != null) OrderStatus.DONE else OrderStatus.FAILED, report)
+                    }
+                }
+        }
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        item { Text("🚗 派車監聽器", fontSize = 24.sp, fontWeight = FontWeight.Bold) }
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("🚗 派車監聽器", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                if (orders.isNotEmpty()) {
+                    TextButton(onClick = {
+                        OrderQueue.clear()
+                        dispatchedIds.clear()
+                    }) {
+                        Text("清除全部", color = Color.Gray)
+                    }
+                }
+            }
+        }
 
         // 監聽狀態
         item {
             Card(colors = CardDefaults.cardColors(
                 containerColor = if (isListening) Color(0xFF1B5E20) else Color(0xFFB71C1C)
             )) {
-                Row(modifier = Modifier.fillMaxWidth().padding(16.dp),
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Text(if (isListening) "✅ 監聽中" else "❌ 尚未授權",
-                        color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        if (isListening) "✅ 監聽中" else "❌ 尚未授權",
+                        color = Color.White, fontWeight = FontWeight.Bold
+                    )
                     if (!isListening) {
                         Button(onClick = {
                             context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
@@ -309,103 +326,142 @@ fun MainScreen(initialOrder: String = "") {
             }
         }
 
-        // GPS 定位
+        // GPS
         item {
             Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF0D47A1))) {
-                Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-                    Row(horizontalArrangement = Arrangement.SpaceBetween,
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        Text("📍 我的位置", color = Color.White, fontWeight = FontWeight.Bold)
-                        OutlinedButton(
-                            onClick = { requestLocation() },
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
-                        ) { Text("更新位置") }
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(locationLabel, color = Color.White, fontSize = 13.sp)
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("📍 $locationLabel", color = Color.White, fontSize = 13.sp,
+                        modifier = Modifier.weight(1f))
+                    OutlinedButton(
+                        onClick = { requestLocation() },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                    ) { Text("更新") }
                 }
             }
         }
 
-        // 群組名稱
+        // 設定
         item {
-            Text("監聽群組名稱", fontWeight = FontWeight.Bold)
-            OutlinedTextField(value = groupName, onValueChange = {
-                groupName = it
-                LineNotificationService.targetGroupName = it
-            }, label = { Text("例如：Q77") }, modifier = Modifier.fillMaxWidth())
-        }
-
-        // 關鍵字
-        item {
-            Text("觸發關鍵字（用、分隔）", fontWeight = FontWeight.Bold)
-            OutlinedTextField(value = keywordInput, onValueChange = {
-                keywordInput = it
-                LineNotificationService.keywords =
-                    it.split("、", "，", ",").map { k -> k.trim() }
-                        .filter { k -> k.isNotEmpty() }.toMutableList()
-            }, label = { Text("例如：西屯、北屯、大里") }, modifier = Modifier.fillMaxWidth())
-        }
-
-        // 訂單
-        item {
-            Text("收到的訂單", fontWeight = FontWeight.Bold)
-            OutlinedTextField(value = orderText, onValueChange = { orderText = it },
-                label = { Text("自動帶入或手動貼上") },
-                modifier = Modifier.fillMaxWidth(), minLines = 3)
-        }
-
-        // 計算按鈕
-        item {
-            Button(onClick = {
-                val address = parseAddress(orderText)
-                if (address == null) {
-                    statusMsg = "❌ 無法解析地址，請確認訂單格式"
-                    return@Button
-                }
-                if (currentLat == null || currentLon == null) {
-                    statusMsg = "❌ 請先更新位置"
-                    return@Button
-                }
-                val reserveTime = parseReserveTime(orderText)
-                isLoading = true
-                statusMsg = "計算中..."
-                scope.launch {
-                    val mins = getRouteMinutes(currentLat!!, currentLon!!, address)
-                    isLoading = false
-                    reportText = buildReport(orderText, mins, reserveTime)
-                    statusMsg = if (mins != null) "📍 距離目的地約 $mins 分鐘" else "⚠️ 無法取得導航時間"
-                }
-            }, modifier = Modifier.fillMaxWidth(), enabled = !isLoading) {
-                if (isLoading) {
-                    CircularProgressIndicator(color = Color.White, modifier = Modifier.height(20.dp))
-                } else {
-                    Text("🗺 計算時間並產生報單", fontSize = 16.sp)
-                }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = groupName,
+                    onValueChange = { groupName = it; LineNotificationService.targetGroupName = it },
+                    label = { Text("監聽群組") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = keywordInput,
+                    onValueChange = {
+                        keywordInput = it
+                        LineNotificationService.keywords = it.split("、", "，", ",")
+                            .map { k -> k.trim() }.filter { k -> k.isNotEmpty() }.toMutableList()
+                    },
+                    label = { Text("觸發關鍵字（用、分隔）") },
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         }
 
-        if (statusMsg.isNotEmpty()) {
-            item { Text(statusMsg, fontWeight = FontWeight.Bold) }
-        }
-
-        if (reportText.isNotEmpty()) {
+        // 訂單列表
+        if (orders.isEmpty()) {
             item {
-                Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF0D47A1))) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text("報單內容", color = Color.White, fontWeight = FontWeight.Bold)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(reportText, color = Color.White, fontSize = 16.sp)
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Button(onClick = {
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            clipboard.setPrimaryClip(ClipData.newPlainText("report", reportText))
-                            Toast.makeText(context, "已複製！貼到 LINE 發送", Toast.LENGTH_SHORT).show()
-                        }, modifier = Modifier.fillMaxWidth()) {
-                            Text("📋 複製報單文字")
-                        }
+                Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF263238))) {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(40.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("等待派車通知...", color = Color.Gray, fontSize = 16.sp)
                     }
+                }
+            }
+        } else {
+            item {
+                Text("待處理訂單（${orders.size} 張）",
+                    fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            }
+            items(orders, key = { it.id }) { order ->
+                OrderCard(order = order, context = context, onDismiss = {
+                    OrderQueue.remove(order.id)
+                    dispatchedIds.remove(order.id)
+                })
+            }
+        }
+    }
+}
+
+@Composable
+fun OrderCard(order: OrderItem, context: Context, onDismiss: () -> Unit) {
+    val cardColor = when (order.status) {
+        OrderStatus.CALCULATING -> Color(0xFF37474F)
+        OrderStatus.DONE -> Color(0xFF0D47A1)
+        OrderStatus.FAILED -> Color(0xFF4E342E)
+    }
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = cardColor),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                when (order.status) {
+                    OrderStatus.CALCULATING -> Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Text("計算中...", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                    OrderStatus.DONE -> {
+                        val lastLine = order.report.split("\n").lastOrNull() ?: ""
+                        val label = when (lastLine) {
+                            "準" -> "${order.minutes} 分 · 準 ✅"
+                            "來不及" -> "${order.minutes} 分 · 來不及 ⚠️"
+                            else -> "${order.minutes} 分鐘"
+                        }
+                        Text(label, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    }
+                    OrderStatus.FAILED -> Text("❌ 無法計算", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("✕", color = Color.White, fontSize = 16.sp)
+                }
+            }
+
+            if (order.address != null) {
+                Text("📍 ${order.address}", color = Color(0xFFB0BEC5), fontSize = 13.sp)
+            }
+
+            val preview = order.raw.take(80) + if (order.raw.length > 80) "…" else ""
+            Text(preview, color = Color(0xFF90A4AE), fontSize = 12.sp)
+
+            if (order.status == OrderStatus.DONE && order.report.isNotEmpty()) {
+                Button(
+                    onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("report", order.report))
+                        context.packageManager.getLaunchIntentForPackage("jp.naver.line.android")
+                            ?.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT) }
+                            ?.let { context.startActivity(it) }
+                        Toast.makeText(context, "已複製！點 LINE 通知進調度室後長按貼上", Toast.LENGTH_LONG).show()
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("📋 複製並開啟群組")
                 }
             }
         }
@@ -413,7 +469,8 @@ fun MainScreen(initialOrder: String = "") {
 }
 
 fun isNotificationListenerEnabled(context: Context): Boolean {
-    val flat = Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners") ?: return false
+    val flat = Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners")
+        ?: return false
     val cn = ComponentName(context, LineNotificationService::class.java)
     return flat.contains(cn.flattenToString())
 }
