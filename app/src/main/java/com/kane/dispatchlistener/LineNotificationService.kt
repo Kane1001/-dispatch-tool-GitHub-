@@ -40,8 +40,9 @@ class LineNotificationService : NotificationListenerService() {
         val sender = title.substringAfterLast("：")
         if (!sender.contains("調度")) return
 
-        // 檢查是否含有觸發關鍵字
-        val matched = keywords.any { text.contains(it) }
+        // 有地區關鍵字，或訊息格式像派單（含 / 且能解析出地址）
+        val matched = keywords.any { text.contains(it) } ||
+                      (text.contains("/") && parseAddress(text) != null)
         if (!matched) return
 
         // 加入訂單列並觸發通知

@@ -86,19 +86,29 @@ class LineAccessibilityService : AccessibilityService() {
 
     private fun findDispatchTexts(root: AccessibilityNodeInfo): List<String> {
         val results = mutableListOf<String>()
-        val keywords = LineNotificationService.keywords
 
-        for (keyword in keywords) {
+        // 策略一：地區關鍵字命中（台中各區/彰化/草屯...）
+        for (keyword in LineNotificationService.keywords) {
             val nodes = root.findAccessibilityNodeInfosByText(keyword)
             for (node in nodes) {
                 val text = node.text?.toString()?.trim() ?: ""
                 node.recycle()
-                // 必須含「/」（派單格式），且 parseAddress 能解析出地址（非隨意聊天）
                 if (text.isNotBlank() && text.contains("/") && parseAddress(text) != null) {
                     results.add(text)
                 }
             }
         }
+
+        // 策略二：派單格式命中（含「/」+能解析地址），補抓沒有地區關鍵字的單
+        val slashNodes = root.findAccessibilityNodeInfosByText("/")
+        for (node in slashNodes) {
+            val text = node.text?.toString()?.trim() ?: ""
+            node.recycle()
+            if (text.isNotBlank() && text.contains("/") && parseAddress(text) != null) {
+                results.add(text)
+            }
+        }
+
         return results.distinct()
     }
 
