@@ -48,13 +48,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.kane.dispatchlistener.ui.theme.DispatchListenerTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
@@ -222,12 +227,28 @@ fun MainScreen(initialOrder: String = "") {
         if (granted) {
             scope.launch {
                 try {
-                    val loc: Location = fusedLocationClient
-                        .getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
-                        .await()
-                    currentLat = loc.latitude
-                    currentLon = loc.longitude
-                    locationLabel = "%.6f, %.6f".format(loc.latitude, loc.longitude)
+                    val loc = suspendCancellableCoroutine<Location?> { cont ->
+                        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 0)
+                            .setMaxUpdates(1)
+                            .build()
+                        val callback = object : LocationCallback() {
+                            override fun onLocationResult(result: LocationResult) {
+                                fusedLocationClient.removeLocationUpdates(this)
+                                cont.resume(result.lastLocation)
+                            }
+                        }
+                        fusedLocationClient.requestLocationUpdates(
+                            request, callback, android.os.Looper.getMainLooper()
+                        )
+                        cont.invokeOnCancellation { fusedLocationClient.removeLocationUpdates(callback) }
+                    }
+                    if (loc != null) {
+                        currentLat = loc.latitude
+                        currentLon = loc.longitude
+                        locationLabel = "%.6f, %.6f".format(loc.latitude, loc.longitude)
+                    } else {
+                        locationLabel = "定位失敗"
+                    }
                 } catch (e: Exception) {
                     locationLabel = "定位失敗"
                 }
