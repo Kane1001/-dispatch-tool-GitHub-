@@ -383,7 +383,7 @@ fun MainScreen() {
                 Text("待處理訂單（${orders.size} 張）",
                     fontWeight = FontWeight.Bold, fontSize = 16.sp)
             }
-            items(orders, key = { it.id }) { order ->
+            items(orders.sortedBy { it.minutes ?: Int.MAX_VALUE }, key = { it.id }) { order ->
                 OrderCard(order = order, context = context, onDismiss = {
                     OrderQueue.remove(order.id)
                     dispatchedIds.remove(order.id)
@@ -395,10 +395,12 @@ fun MainScreen() {
 
 @Composable
 fun OrderCard(order: OrderItem, context: Context, onDismiss: () -> Unit) {
-    val cardColor = when (order.status) {
-        OrderStatus.CALCULATING -> Color(0xFF37474F)
-        OrderStatus.DONE -> Color(0xFF0D47A1)
-        OrderStatus.FAILED -> Color(0xFF4E342E)
+    val isHighValue = order.raw.contains("低消300")
+    val cardColor = when {
+        isHighValue -> Color(0xFF1B5E20)
+        order.status == OrderStatus.CALCULATING -> Color(0xFF37474F)
+        order.status == OrderStatus.DONE -> Color(0xFF0D47A1)
+        else -> Color(0xFF4E342E)
     }
 
     Card(
