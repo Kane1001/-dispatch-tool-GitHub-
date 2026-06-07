@@ -36,6 +36,10 @@ class LineNotificationService : NotificationListenerService() {
         // 檢查是否來自目標群組
         if (!title.contains(targetGroupName)) return
 
+        // 檢查是否為調度發送（title 格式：群組名：發送者）
+        val sender = title.substringAfterLast("：")
+        if (!sender.contains("調度")) return
+
         // 檢查是否含有觸發關鍵字
         val matched = keywords.any { text.contains(it) }
         if (!matched) return
