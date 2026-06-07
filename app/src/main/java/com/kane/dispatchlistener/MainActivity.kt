@@ -61,6 +61,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.snapshotFlow
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -206,6 +207,7 @@ fun MainScreen() {
     var groupName by remember { mutableStateOf(LineNotificationService.targetGroupName) }
     var keywordInput by remember { mutableStateOf(LineNotificationService.keywords.joinToString("、")) }
     var isListening by remember { mutableStateOf(false) }
+    var isAccessibilityEnabled by remember { mutableStateOf(false) }
     var currentLat by remember { mutableStateOf<Double?>(null) }
     var currentLon by remember { mutableStateOf<Double?>(null) }
     var locationLabel by remember { mutableStateOf("尚未定位") }
@@ -218,45 +220,38 @@ fun MainScreen() {
         if (!granted) locationLabel = "需要定位權限"
     }
 
-    fun requestLocation() {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
-            == PackageManager.PERMISSION_GRANTED) {
-            scope.launch {
-                try {
-                    locationLabel = "定位中..."
-                    val loc = suspendCancellableCoroutine<Location?> { cont ->
-                        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 0)
-                            .setMaxUpdates(1).build()
-                        val callback = object : LocationCallback() {
-                            override fun onLocationResult(result: LocationResult) {
-                                fusedLocationClient.removeLocationUpdates(this)
-                                cont.resume(result.lastLocation)
-                            }
-                        }
-                        fusedLocationClient.requestLocationUpdates(
-                            request, callback, android.os.Looper.getMainLooper()
-                        )
-                        cont.invokeOnCancellation { fusedLocationClient.removeLocationUpdates(callback) }
-                    }
-                    if (loc != null) {
-                        currentLat = loc.latitude
-                        currentLon = loc.longitude
-                        locationLabel = "%.6f, %.6f".format(loc.latitude, loc.longitude)
-                    } else {
-                        locationLabel = "定位失敗"
-                    }
-                } catch (e: Exception) {
-                    locationLabel = "定位失敗"
+    // 持續定位：app 開著就每 4 秒自動更新
+    DisposableEffect(fusedLocationClient) {
+        val callback = object : LocationCallback() {
+            override fun onLocationResult(result: LocationResult) {
+                result.lastLocation?.let { loc ->
+                    currentLat = loc.latitude
+                    currentLon = loc.longitude
+                    locationLabel = "%.5f, %.5f".format(loc.latitude, loc.longitude)
                 }
             }
-        } else {
-            locationPermLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
         }
+        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 4000L)
+            .setMinUpdateIntervalMillis(2000L)
+            .setMinUpdateDistanceMeters(10f)
+            .build()
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
+            == PackageManager.PERMISSION_GRANTED) {
+            fusedLocationClient.requestLocationUpdates(request, callback, android.os.Looper.getMainLooper())
+            locationLabel = "定位中..."
+        } else {
+            locationLabel = "需要定位權限"
+        }
+        onDispose { fusedLocationClient.removeLocationUpdates(callback) }
     }
 
     LaunchedEffect(Unit) {
         isListening = isNotificationListenerEnabled(context)
-        requestLocation()
+        isAccessibilityEnabled = isAccessibilityServiceEnabled(context)
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED) {
+            locationPermLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
     }
 
     // 自動計算：GPS 或訂單任一更新就重新觸發
@@ -326,6 +321,33 @@ fun MainScreen() {
             }
         }
 
+        // 無障礙服務狀態
+        item {
+            Card(colors = CardDefaults.cardColors(
+                containerColor = if (isAccessibilityEnabled) Color(0xFF1A237E) else Color(0xFF4A148C)
+            )) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        if (isAccessibilityEnabled) "♿ 無障礙：已啟用（LINE 前景也能抓單）"
+                        else "♿ 無障礙：未啟用（在 LINE 內看不到新單）",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (!isAccessibilityEnabled) {
+                        Button(onClick = {
+                            context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                        }) { Text("去授權") }
+                    }
+                }
+            }
+        }
+
         // GPS
         item {
             Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF0D47A1))) {
@@ -336,10 +358,7 @@ fun MainScreen() {
                 ) {
                     Text("📍 $locationLabel", color = Color.White, fontSize = 13.sp,
                         modifier = Modifier.weight(1f))
-                    OutlinedButton(
-                        onClick = { requestLocation() },
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
-                    ) { Text("更新") }
+                    Text("即時更新", color = Color(0xFF90CAF9), fontSize = 11.sp)
                 }
             }
         }
@@ -474,5 +493,14 @@ fun isNotificationListenerEnabled(context: Context): Boolean {
     val flat = Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners")
         ?: return false
     val cn = ComponentName(context, LineNotificationService::class.java)
+    return flat.contains(cn.flattenToString())
+}
+
+fun isAccessibilityServiceEnabled(context: Context): Boolean {
+    val flat = Settings.Secure.getString(
+        context.contentResolver,
+        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+    ) ?: return false
+    val cn = ComponentName(context, LineAccessibilityService::class.java)
     return flat.contains(cn.flattenToString())
 }
