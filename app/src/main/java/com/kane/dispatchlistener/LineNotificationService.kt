@@ -1,0 +1,87 @@
+package com.kane.dispatchlistener
+
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Intent
+import android.os.Build
+import android.service.notification.NotificationListenerService
+import android.service.notification.StatusBarNotification
+import android.util.Log
+import androidx.core.app.NotificationCompat
+
+class LineNotificationService : NotificationListenerService() {
+
+    companion object {
+        const val LINE_PACKAGE = "jp.naver.line.android"
+        const val CHANNEL_ID = "dispatch_alert"
+        const val CHANNEL_NAME = "派車警示"
+
+        // 你要監聽的群組關鍵字（可在 MainActivity 設定）
+        var targetGroupName = "Q77"
+
+        // 觸發通知的關鍵字（符合任一個就通知）
+        var keywords = mutableListOf("西屯", "北屯", "南屯", "大里", "太平", "豐原")
+    }
+
+    override fun onNotificationPosted(sbn: StatusBarNotification) {
+        if (sbn.packageName != LINE_PACKAGE) return
+
+        val extras = sbn.notification.extras
+        val title = extras.getString("android.title") ?: return
+        val text = extras.getCharSequence("android.text")?.toString() ?: return
+
+        Log.d("LineNotify", "title=$title | text=$text")
+
+        // 檢查是否來自目標群組
+        if (!title.contains(targetGroupName)) return
+
+        // 檢查是否含有觸發關鍵字
+        val matched = keywords.any { text.contains(it) }
+        if (!matched) return
+
+        // 觸發高優先通知
+        showAlert(title, text)
+    }
+
+    private fun showAlert(title: String, text: String) {
+        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                CHANNEL_NAME,
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0, 500, 200, 500, 200, 500)
+            }
+            manager.createNotificationChannel(channel)
+        }
+
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            putExtra("order_text", text)
+        }
+
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentTitle("🚗 有單！$title")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .build()
+
+        manager.notify(System.currentTimeMillis().toInt(), notification)
+    }
+
+    override fun onNotificationRemoved(sbn: StatusBarNotification) {}
+}
