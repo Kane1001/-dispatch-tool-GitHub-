@@ -109,7 +109,10 @@ class LineAccessibilityService : AccessibilityService() {
             }
         }
 
-        return results.distinct()
+        // 相同 parseAddress 的結果只保留最短那筆（最精確的 node，排除上層夾帶其他訊息的情況）
+        return results.groupBy { parseAddress(it) ?: it }
+            .values
+            .map { group -> group.minByOrNull { it.length }!! }
     }
 
     override fun onInterrupt() {}

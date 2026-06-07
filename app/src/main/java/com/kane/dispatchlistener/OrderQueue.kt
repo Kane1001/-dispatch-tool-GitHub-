@@ -25,12 +25,15 @@ object OrderQueue {
 
     fun add(raw: String, chatId: String? = null, contentIntent: PendingIntent? = null) {
         val now = System.currentTimeMillis()
-        // 相同訊息已在 queue 中（不管來源是通知還是無障礙），直接跳過
+        val parsedAddr = parseAddress(raw)
+        // 相同文字 → 跳過
         if (_orders.value.any { it.raw == raw }) return
+        // 相同地址（格式差異導致文字略不同的同一張單）→ 跳過
+        if (parsedAddr != null && _orders.value.any { it.address == parsedAddr }) return
         val item = OrderItem(
             id = now,
             raw = raw,
-            address = parseAddress(raw),
+            address = parsedAddr,
             reserveTime = parseReserveTime(raw),
             chatId = chatId,
             contentIntent = contentIntent
