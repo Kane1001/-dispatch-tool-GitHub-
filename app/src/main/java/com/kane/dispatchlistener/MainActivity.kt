@@ -146,10 +146,11 @@ fun buildDestination(address: String, raw: String = ""): String {
         }
     }
 
-    // 台中各區
+    // 台中各區（中區/東區/西區/南區/北區本身已有「區」字，不重複補）
     for (d in tcDistricts) {
         if (address.startsWith(d) && !address.startsWith(d + "區")) {
-            val dest = "台中市${d}區${address.drop(d.length)}"
+            val districtFull = if (d.endsWith("區")) "台中市$d" else "台中市${d}區"
+            val dest = "$districtFull${address.drop(d.length)}"
             android.util.Log.d("DispatchDest", "台中地區：$dest（原始：$address）")
             return dest
         }
