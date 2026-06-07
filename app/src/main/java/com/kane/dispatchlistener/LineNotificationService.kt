@@ -23,8 +23,8 @@ class LineNotificationService : NotificationListenerService() {
         // 觸發通知的關鍵字（符合任一個就通知）
         var keywords = mutableListOf("西屯", "北屯", "南屯", "大里", "太平", "豐原", "高鐵", "彰化", "南投", "草屯", "伸港", "苗栗", "沙鹿", "清水", "大甲")
 
-        // 排除關鍵字（含有這些字就不抓，例如司機回覆「出發」）
-        var excludeKeywords = mutableListOf("出發", "已接", "到了", "已到", "抵達")
+        // 排除關鍵字（含有這些字就不抓，例如司機回覆「出發」或接單符號）
+        var excludeKeywords = mutableListOf("出發", "已接", "到了", "已到", "抵達", "⬆️", "🔼", "↑")
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
