@@ -87,13 +87,16 @@ class LineAccessibilityService : AccessibilityService() {
     private fun findDispatchTexts(root: AccessibilityNodeInfo): List<String> {
         val results = mutableListOf<String>()
 
+        val excludes = LineNotificationService.excludeKeywords
+
         // 策略一：地區關鍵字命中（台中各區/彰化/草屯...）
         for (keyword in LineNotificationService.keywords) {
             val nodes = root.findAccessibilityNodeInfosByText(keyword)
             for (node in nodes) {
                 val text = node.text?.toString()?.trim() ?: ""
                 node.recycle()
-                if (text.isNotBlank() && text.contains("/") && parseAddress(text) != null) {
+                if (text.isNotBlank() && text.contains("/") && parseAddress(text) != null
+                    && excludes.none { text.contains(it) }) {
                     results.add(text)
                 }
             }
@@ -104,7 +107,8 @@ class LineAccessibilityService : AccessibilityService() {
         for (node in slashNodes) {
             val text = node.text?.toString()?.trim() ?: ""
             node.recycle()
-            if (text.isNotBlank() && text.contains("/") && parseAddress(text) != null) {
+            if (text.isNotBlank() && text.contains("/") && parseAddress(text) != null
+                && excludes.none { text.contains(it) }) {
                 results.add(text)
             }
         }

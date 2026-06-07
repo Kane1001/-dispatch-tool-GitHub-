@@ -22,6 +22,9 @@ class LineNotificationService : NotificationListenerService() {
 
         // 觸發通知的關鍵字（符合任一個就通知）
         var keywords = mutableListOf("西屯", "北屯", "南屯", "大里", "太平", "豐原", "高鐵", "彰化", "南投", "草屯", "伸港", "苗栗", "沙鹿", "清水", "大甲")
+
+        // 排除關鍵字（含有這些字就不抓，例如司機回覆「出發」）
+        var excludeKeywords = mutableListOf("出發", "已接", "到了", "已到", "抵達")
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
@@ -39,6 +42,9 @@ class LineNotificationService : NotificationListenerService() {
         // 檢查是否為調度發送（title 格式：群組名：發送者）
         val sender = title.substringAfterLast("：")
         if (!sender.contains("調度")) return
+
+        // 排除回覆類訊息（如司機出發回覆）
+        if (excludeKeywords.any { text.contains(it) }) return
 
         // 有地區關鍵字，或訊息格式像派單（含 / 且能解析出地址）
         val matched = keywords.any { text.contains(it) } ||
