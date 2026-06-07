@@ -85,7 +85,7 @@ class LineNotificationService : NotificationListenerService() {
             .setAutoCancel(true)
             .build()
 
-        manager.notify(System.currentTimeMillis().toInt(), notification)
+        manager.notify(text.hashCode(), notification)
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {}

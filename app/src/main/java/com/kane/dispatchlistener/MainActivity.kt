@@ -318,6 +318,8 @@ fun MainScreen() {
                 Text("🚗 派車監聽器", fontSize = 24.sp, fontWeight = FontWeight.Bold)
                 if (orders.isNotEmpty()) {
                     TextButton(onClick = {
+                        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+                        orders.forEach { nm.cancel(it.raw.hashCode()) }
                         OrderQueue.clear()
                         dispatchedIds.clear()
                     }) {
@@ -433,6 +435,8 @@ fun MainScreen() {
             }
             items(orders.sortedBy { it.minutes ?: Int.MAX_VALUE }, key = { it.id }) { order ->
                 OrderCard(order = order, context = context, onDismiss = {
+                    (context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager)
+                        .cancel(order.raw.hashCode())
                     OrderQueue.remove(order.id)
                     dispatchedIds.remove(order.id)
                 })
