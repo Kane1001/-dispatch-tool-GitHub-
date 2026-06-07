@@ -24,7 +24,8 @@ object OrderQueue {
 
     fun add(raw: String, chatId: String? = null, contentIntent: PendingIntent? = null) {
         val now = System.currentTimeMillis()
-        if (_orders.value.any { it.raw == raw && (now - it.id) < 5000 }) return
+        // 相同訊息已在 queue 中（不管來源是通知還是無障礙），直接跳過
+        if (_orders.value.any { it.raw == raw }) return
         val item = OrderItem(
             id = now,
             raw = raw,

@@ -93,8 +93,8 @@ class LineAccessibilityService : AccessibilityService() {
             for (node in nodes) {
                 val text = node.text?.toString()?.trim() ?: ""
                 node.recycle()
-                // 派單格式通常含有「/」分隔欄位
-                if (text.isNotBlank() && text.contains("/")) {
+                // 必須含「/」（派單格式），且 parseAddress 能解析出地址（非隨意聊天）
+                if (text.isNotBlank() && text.contains("/") && parseAddress(text) != null) {
                     results.add(text)
                 }
             }
