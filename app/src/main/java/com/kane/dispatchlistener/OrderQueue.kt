@@ -15,7 +15,8 @@ data class OrderItem(
     val contentIntent: PendingIntent? = null,
     val minutes: Int? = null,
     val status: OrderStatus = OrderStatus.CALCULATING,
-    val report: String = ""
+    val report: String = "",
+    val resolvedDest: String? = null
 )
 
 object OrderQueue {
@@ -37,9 +38,9 @@ object OrderQueue {
         _orders.value = _orders.value + item
     }
 
-    fun update(id: Long, minutes: Int?, status: OrderStatus, report: String) {
+    fun update(id: Long, minutes: Int?, status: OrderStatus, report: String, resolvedDest: String? = null) {
         _orders.value = _orders.value.map {
-            if (it.id == id) it.copy(minutes = minutes, status = status, report = report)
+            if (it.id == id) it.copy(minutes = minutes, status = status, report = report, resolvedDest = resolvedDest)
             else it
         }
     }

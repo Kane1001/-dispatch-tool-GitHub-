@@ -296,10 +296,11 @@ fun MainScreen() {
                             OrderQueue.update(order.id, null, OrderStatus.FAILED, "")
                             return@launch
                         }
+                        val resolvedDest = convertChineseNum(buildDestination(order.address, order.raw))
                         val mins = getRouteMinutes(lat, lon, order.address, order.raw)
                         val report = buildReport(order.raw, mins, order.reserveTime)
                         OrderQueue.update(order.id, mins,
-                            if (mins != null) OrderStatus.DONE else OrderStatus.FAILED, report)
+                            if (mins != null) OrderStatus.DONE else OrderStatus.FAILED, report, resolvedDest)
                     }
                 }
         }
@@ -498,6 +499,9 @@ fun OrderCard(order: OrderItem, context: Context, onDismiss: () -> Unit) {
 
             if (order.address != null) {
                 Text("📍 ${order.address}", color = Color(0xFFB0BEC5), fontSize = 13.sp)
+            }
+            if (order.resolvedDest != null) {
+                Text("🗺 ${order.resolvedDest}", color = Color(0xFF4DB6AC), fontSize = 12.sp)
             }
 
             val preview = order.raw.take(80) + if (order.raw.length > 80) "…" else ""
