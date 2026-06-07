@@ -118,17 +118,46 @@ fun parseReserveTime(orderText: String): String? {
         ?.let { timeRegex.find(it)?.value }
 }
 
-fun buildDestination(address: String): String {
+// 非台中縣市的關鍵字 → 縣市前綴（派單第一欄的地區名）
+private val outOfTcAreaMap = mapOf(
+    "彰化" to "彰化縣",
+    "伸港" to "彰化縣伸港鄉",
+    "南投" to "南投縣",
+    "草屯" to "南投縣草屯鎮",
+    "苗栗" to "苗栗縣"
+)
+
+fun buildDestination(address: String, raw: String = ""): String {
     val tcDistricts = listOf("西屯","南屯","北屯","豐原","大里","太平","大甲","清水","沙鹿","梧棲",
         "后里","神岡","潭子","大雅","新社","石岡","東勢","和平","烏日","大肚","龍井","霧峰",
         "外埔","大安","中區","東區","西區","南區","北區")
+
+    // 地址本身已含縣市資訊，直接用
     if (address.contains("市") || address.contains("縣")) return address
-    for (d in tcDistricts) {
-        if (address.startsWith(d) && !address.startsWith(d + "區")) {
-            return "台中市${d}區${address.drop(d.length)}"
+
+    // 從訂單第一欄（地區）判斷是否為非台中縣市
+    val areaHint = raw.split("/").firstOrNull()?.trim() ?: ""
+    for ((keyword, prefix) in outOfTcAreaMap) {
+        if (areaHint.contains(keyword) || address.contains(keyword)) {
+            val dest = if (address.contains(Regex("[路街道巷弄]"))) "$prefix$address"
+                       else "$prefix $address"
+            android.util.Log.d("DispatchDest", "非台中地區：$dest（原始：$address）")
+            return dest
         }
     }
-    return if (address.contains(Regex("[路街道巷弄]"))) "台中市$address" else "$address 台中"
+
+    // 台中各區
+    for (d in tcDistricts) {
+        if (address.startsWith(d) && !address.startsWith(d + "區")) {
+            val dest = "台中市${d}區${address.drop(d.length)}"
+            android.util.Log.d("DispatchDest", "台中地區：$dest（原始：$address）")
+            return dest
+        }
+    }
+
+    val dest = if (address.contains(Regex("[路街道巷弄]"))) "台中市$address" else "$address 台中"
+    android.util.Log.d("DispatchDest", "預設台中：$dest（原始：$address）")
+    return dest
 }
 
 fun convertChineseNum(str: String): String {
@@ -145,10 +174,10 @@ fun convertChineseNum(str: String): String {
     return result
 }
 
-suspend fun getRouteMinutes(originLat: Double, originLon: Double, destination: String): Int? {
+suspend fun getRouteMinutes(originLat: Double, originLon: Double, destination: String, raw: String = ""): Int? {
     return withContext(Dispatchers.IO) {
         try {
-            val dest = convertChineseNum(buildDestination(destination))
+            val dest = convertChineseNum(buildDestination(destination, raw))
             val url = "https://maps.googleapis.com/maps/api/distancematrix/json" +
                     "?origins=${encode("$originLat,$originLon")}" +
                     "&destinations=${encode(dest)}" +
@@ -267,7 +296,7 @@ fun MainScreen() {
                             OrderQueue.update(order.id, null, OrderStatus.FAILED, "")
                             return@launch
                         }
-                        val mins = getRouteMinutes(lat, lon, order.address)
+                        val mins = getRouteMinutes(lat, lon, order.address, order.raw)
                         val report = buildReport(order.raw, mins, order.reserveTime)
                         OrderQueue.update(order.id, mins,
                             if (mins != null) OrderStatus.DONE else OrderStatus.FAILED, report)
