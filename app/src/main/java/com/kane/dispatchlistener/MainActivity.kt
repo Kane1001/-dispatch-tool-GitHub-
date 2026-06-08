@@ -236,6 +236,7 @@ fun MainScreen() {
 
     var groupName by remember { mutableStateOf(LineNotificationService.targetGroupName) }
     var keywordInput by remember { mutableStateOf(LineNotificationService.keywords.joinToString("、")) }
+    var allowedSenderInput by remember { mutableStateOf(LineNotificationService.allowedSenders.joinToString("、")) }
     var isListening by remember { mutableStateOf(false) }
     var isAccessibilityEnabled by remember { mutableStateOf(false) }
     var currentLat by remember { mutableStateOf<Double?>(null) }
@@ -463,6 +464,16 @@ fun MainScreen() {
                             .map { k -> k.trim() }.filter { k -> k.isNotEmpty() }.toMutableList()
                     },
                     label = { Text("觸發關鍵字（用、分隔）") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = allowedSenderInput,
+                    onValueChange = {
+                        allowedSenderInput = it
+                        LineNotificationService.allowedSenders = it.split("、", "，", ",")
+                            .map { s -> s.trim() }.filter { s -> s.isNotEmpty() }.toMutableList()
+                    },
+                    label = { Text("額外允許帳號（用、分隔，空格會忽略）") },
                     modifier = Modifier.fillMaxWidth()
                 )
             }

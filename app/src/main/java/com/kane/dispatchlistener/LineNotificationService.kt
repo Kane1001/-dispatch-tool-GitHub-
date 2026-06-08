@@ -25,6 +25,9 @@ class LineNotificationService : NotificationListenerService() {
 
         // 排除關鍵字（含有這些字就不抓，例如司機回覆「出發」或接單符號）
         var excludeKeywords = mutableListOf("出發", "已接", "到了", "已到", "抵達", "客上", "⬆️", "🔼", "↑")
+
+        // 額外允許的發送者帳號（不含「調度」但仍要抓的帳號，空格會被忽略）
+        var allowedSenders = mutableListOf("RATTI")
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
@@ -39,9 +42,12 @@ class LineNotificationService : NotificationListenerService() {
         // 檢查是否來自目標群組
         if (!title.contains(targetGroupName)) return
 
-        // 檢查是否為調度發送（title 格式：群組名：發送者）
+        // 檢查是否為調度發送（名稱含「調度」，或在白名單內）
         val sender = title.substringAfterLast("：")
-        if (!sender.contains("調度")) return
+        val senderNorm = sender.replace(" ", "")
+        val senderAllowed = sender.contains("調度") ||
+            allowedSenders.any { senderNorm.contains(it.replace(" ", ""), ignoreCase = true) }
+        if (!senderAllowed) return
 
         // 調度員丟貼圖 = 分隔線，本輪派車結束 → 清空所有舊單
         val isSticker = text.contains("貼圖") || text.contains("Sticker", ignoreCase = true)
