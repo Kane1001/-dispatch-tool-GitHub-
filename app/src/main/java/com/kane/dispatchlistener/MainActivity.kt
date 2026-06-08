@@ -284,6 +284,21 @@ fun MainScreen() {
         }
     }
 
+    // 超過 30 分鐘的舊單自動清除
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(60_000L)
+            val now = System.currentTimeMillis()
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+            OrderQueue.orders.value
+                .filter { now - it.id > 30 * 60 * 1000L }
+                .forEach { order ->
+                    nm.cancel(order.raw.hashCode())
+                    OrderQueue.remove(order.id)
+                }
+        }
+    }
+
     // 自動計算：GPS 或訂單任一更新就重新觸發
     LaunchedEffect(Unit) {
         var lastRecalcLat: Double? = null

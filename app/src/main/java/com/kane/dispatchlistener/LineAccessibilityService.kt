@@ -9,10 +9,12 @@ import android.view.accessibility.AccessibilityNodeInfo
 
 class LineAccessibilityService : AccessibilityService() {
 
-    // key = 訊息文字, value = 最後處理的 timestamp
     private val seenMessages = mutableMapOf<String, Long>()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pendingCheck = false
+
+    // 快取「目前是否在目標群組畫面」，避免在其他群組時誤抓
+    private var inTargetGroup = false
 
     override fun onServiceConnected() {
         Log.d("LineA11y", "無障礙服務已連線")
@@ -22,12 +24,20 @@ class LineAccessibilityService : AccessibilityService() {
         if (event.packageName != "jp.naver.line.android") return
 
         when (event.eventType) {
-            // 切換畫面（進入新群組）：先標記畫面上現有訊息為「已看過」，避免舊單重複加入
+            // 切換畫面時更新 inTargetGroup 旗標
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                mainHandler.post { markExistingAsRead() }
+                mainHandler.post {
+                    val root = rootInActiveWindow
+                    inTargetGroup = if (root != null) {
+                        isInTargetGroup(root).also { root.recycle() }
+                    } else false
+                    Log.d("LineA11y", "畫面切換，inTargetGroup=$inTargetGroup")
+                    if (inTargetGroup) markExistingAsRead()
+                }
             }
-            // 畫面內容變化（新訊息出現）：debounce 500ms 後掃描
+            // 畫面內容變化：只在目標群組內才掃描
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+                if (!inTargetGroup) return
                 if (!pendingCheck) {
                     pendingCheck = true
                     mainHandler.postDelayed({
@@ -43,9 +53,7 @@ class LineAccessibilityService : AccessibilityService() {
         val root = rootInActiveWindow ?: return
         try {
             val now = System.currentTimeMillis()
-            findDispatchTexts(root).forEach { text ->
-                seenMessages[text] = now
-            }
+            findDispatchTexts(root).forEach { text -> seenMessages[text] = now }
             Log.d("LineA11y", "標記現有訊息 ${seenMessages.size} 筆為已讀")
         } finally {
             root.recycle()
@@ -55,7 +63,11 @@ class LineAccessibilityService : AccessibilityService() {
     private fun checkForNewOrders() {
         val root = rootInActiveWindow ?: return
         try {
-            if (!isInTargetGroup(root)) return
+            // 再次確認（防止畫面已切走）
+            if (!isInTargetGroup(root)) {
+                inTargetGroup = false
+                return
+            }
 
             val now = System.currentTimeMillis()
             val newTexts = findDispatchTexts(root).filter { text ->
@@ -69,7 +81,6 @@ class LineAccessibilityService : AccessibilityService() {
                 OrderQueue.add(text)
             }
 
-            // 清理超過 2 分鐘的記錄
             seenMessages.entries.removeAll { now - it.value > 120_000 }
         } finally {
             root.recycle()
@@ -77,8 +88,15 @@ class LineAccessibilityService : AccessibilityService() {
     }
 
     private fun isInTargetGroup(root: AccessibilityNodeInfo): Boolean {
-        // LINE 標題列會顯示群組名稱，找到"調度室"代表在派車群組內
-        val nodes = root.findAccessibilityNodeInfosByText("調度室")
+        // 用完整群組名稱比對，比只比對「調度室」更精確，避免在其他 LINE 畫面誤判
+        val target = LineNotificationService.targetGroupName
+        var nodes = root.findAccessibilityNodeInfosByText(target)
+        if (nodes.isNotEmpty()) {
+            nodes.forEach { it.recycle() }
+            return true
+        }
+        // 備用：比對較短但仍具唯一性的片段（群組名稱中文部分）
+        nodes = root.findAccessibilityNodeInfosByText("海口-")
         val found = nodes.isNotEmpty()
         nodes.forEach { it.recycle() }
         return found
@@ -86,10 +104,9 @@ class LineAccessibilityService : AccessibilityService() {
 
     private fun findDispatchTexts(root: AccessibilityNodeInfo): List<String> {
         val results = mutableListOf<String>()
-
         val excludes = LineNotificationService.excludeKeywords
 
-        // 策略一：地區關鍵字命中（台中各區/彰化/草屯...）
+        // 策略一：地區關鍵字命中
         for (keyword in LineNotificationService.keywords) {
             val nodes = root.findAccessibilityNodeInfosByText(keyword)
             for (node in nodes) {
@@ -113,7 +130,7 @@ class LineAccessibilityService : AccessibilityService() {
             }
         }
 
-        // 相同 parseAddress 的結果只保留最短那筆（最精確的 node，排除上層夾帶其他訊息的情況）
+        // 相同地址只保留最短那筆
         return results.groupBy { parseAddress(it) ?: it }
             .values
             .map { group -> group.minByOrNull { it.length }!! }
