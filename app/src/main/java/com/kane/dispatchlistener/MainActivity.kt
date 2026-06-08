@@ -286,9 +286,15 @@ fun MainScreen() {
 
     // 自動計算：GPS 或訂單任一更新就重新觸發
     LaunchedEffect(Unit) {
+        var lastRecalcLat: Double? = null
+        var lastRecalcLon: Double? = null
+        var lastRecalcTime = 0L
+
         snapshotFlow { currentLat to orders }.collect { (lat, orderList) ->
             if (lat == null) return@collect
             val lon = currentLon ?: return@collect
+
+            // 新單初次計算
             orderList.filter { it.status == OrderStatus.CALCULATING && it.id !in dispatchedIds }
                 .forEach { order ->
                     dispatchedIds.add(order.id)
@@ -305,6 +311,34 @@ fun MainScreen() {
                             if (mins != null) OrderStatus.DONE else OrderStatus.FAILED, report, resolvedDest)
                     }
                 }
+
+            // 已完成的單：定位移動超過 100 公尺或超過 60 秒就重算
+            val doneOrders = orderList.filter { it.status == OrderStatus.DONE && it.address != null }
+            if (doneOrders.isEmpty()) return@collect
+
+            val now = System.currentTimeMillis()
+            val distanceMoved = if (lastRecalcLat != null && lastRecalcLon != null) {
+                val result = FloatArray(1)
+                Location.distanceBetween(lastRecalcLat!!, lastRecalcLon!!, lat, lon, result)
+                result[0]
+            } else Float.MAX_VALUE
+
+            if (distanceMoved >= 100f || now - lastRecalcTime >= 60_000L) {
+                lastRecalcLat = lat
+                lastRecalcLon = lon
+                lastRecalcTime = now
+                doneOrders.forEach { order ->
+                    scope.launch {
+                        val rawMins = getRouteMinutes(lat, lon, order.address!!, order.raw)
+                        val mins = if (rawMins != null && rawMins <= 1) 3 else rawMins
+                        if (mins != null) {
+                            val report = buildReport(order.raw, mins, order.reserveTime)
+                            val resolvedDest = convertChineseNum(buildDestination(order.address, order.raw))
+                            OrderQueue.update(order.id, mins, OrderStatus.DONE, report, resolvedDest)
+                        }
+                    }
+                }
+            }
         }
     }
 
