@@ -450,7 +450,7 @@ fun MainScreen() {
 
 @Composable
 fun OrderCard(order: OrderItem, context: Context, onDismiss: () -> Unit) {
-    val isHighValue = order.raw.contains("低消300")
+    val isHighValue = order.raw.contains("低消")
     val cardColor = when {
         isHighValue -> Color(0xFF1B5E20)
         order.status == OrderStatus.CALCULATING -> Color(0xFF37474F)
