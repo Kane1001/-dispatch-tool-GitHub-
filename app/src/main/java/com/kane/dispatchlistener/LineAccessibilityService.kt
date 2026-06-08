@@ -88,15 +88,8 @@ class LineAccessibilityService : AccessibilityService() {
     }
 
     private fun isInTargetGroup(root: AccessibilityNodeInfo): Boolean {
-        // 用完整群組名稱比對，比只比對「調度室」更精確，避免在其他 LINE 畫面誤判
-        val target = LineNotificationService.targetGroupName
-        var nodes = root.findAccessibilityNodeInfosByText(target)
-        if (nodes.isNotEmpty()) {
-            nodes.forEach { it.recycle() }
-            return true
-        }
-        // 備用：比對較短但仍具唯一性的片段（群組名稱中文部分）
-        nodes = root.findAccessibilityNodeInfosByText("海口-")
+        // 只比對「調度室」：調度室 ≠ 辦公室，可精確區分 HC 調度室和 HC 辦公室
+        val nodes = root.findAccessibilityNodeInfosByText("調度室")
         val found = nodes.isNotEmpty()
         nodes.forEach { it.recycle() }
         return found
@@ -113,7 +106,7 @@ class LineAccessibilityService : AccessibilityService() {
                 val text = node.text?.toString()?.trim() ?: ""
                 node.recycle()
                 if (text.isNotBlank() && text.contains("/") && parseAddress(text) != null
-                    && excludes.none { text.contains(it) }) {
+                    && excludes.none { text.contains(it) } && !isArrivalReport(text)) {
                     results.add(text)
                 }
             }
@@ -125,7 +118,7 @@ class LineAccessibilityService : AccessibilityService() {
             val text = node.text?.toString()?.trim() ?: ""
             node.recycle()
             if (text.isNotBlank() && text.contains("/") && parseAddress(text) != null
-                && excludes.none { text.contains(it) }) {
+                && excludes.none { text.contains(it) } && !isArrivalReport(text)) {
                 results.add(text)
             }
         }
@@ -134,6 +127,12 @@ class LineAccessibilityService : AccessibilityService() {
         return results.groupBy { parseAddress(it) ?: it }
             .values
             .map { group -> group.minByOrNull { it.length }!! }
+    }
+
+    // 司機回報「/到」模式：最後一個欄位是純到達確認，不是新派單
+    private fun isArrivalReport(text: String): Boolean {
+        val lastField = text.split("/").lastOrNull()?.trim() ?: return false
+        return lastField == "到" || lastField == "到了" || lastField == "已到" || lastField == "抵達"
     }
 
     override fun onInterrupt() {}

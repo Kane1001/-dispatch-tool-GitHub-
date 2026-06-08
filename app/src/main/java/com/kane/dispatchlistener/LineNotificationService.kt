@@ -62,6 +62,10 @@ class LineNotificationService : NotificationListenerService() {
         // 排除回覆類訊息（如司機出發回覆）
         if (excludeKeywords.any { text.contains(it) }) return
 
+        // 排除司機「/到」模式（最後欄位是到達確認）
+        val lastField = text.split("/").lastOrNull()?.trim() ?: ""
+        if (lastField == "到" || lastField == "到了" || lastField == "已到" || lastField == "抵達") return
+
         // 有地區關鍵字，或訊息格式像派單（含 / 且能解析出地址）
         val matched = keywords.any { text.contains(it) } ||
                       (text.contains("/") && parseAddress(text) != null)
