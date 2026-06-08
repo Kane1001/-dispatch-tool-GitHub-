@@ -43,6 +43,16 @@ class LineNotificationService : NotificationListenerService() {
         val sender = title.substringAfterLast("：")
         if (!sender.contains("調度")) return
 
+        // 調度員丟貼圖 = 分隔線，本輪派車結束 → 清空所有舊單
+        val isSticker = text.contains("貼圖") || text.contains("Sticker", ignoreCase = true)
+        if (isSticker) {
+            val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            OrderQueue.orders.value.forEach { nm.cancel(it.raw.hashCode()) }
+            OrderQueue.clear()
+            Log.d("LineNotify", "偵測到分隔貼圖，清除所有訂單")
+            return
+        }
+
         // 排除回覆類訊息（如司機出發回覆）
         if (excludeKeywords.any { text.contains(it) }) return
 
