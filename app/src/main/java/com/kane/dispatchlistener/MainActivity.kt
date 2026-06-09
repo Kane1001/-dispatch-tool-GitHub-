@@ -15,6 +15,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +26,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -32,6 +35,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -70,12 +74,24 @@ import kotlin.coroutines.resume
 
 const val MAPS_API_KEY = "AIzaSyBV2J4zwqtWexO3gFg2UAEDL6YuSauSHm0"
 
+// iOS 風格色系
+private val BG         = Color(0xFFF2F2F7)  // iOS systemGroupedBackground
+private val CARD       = Color(0xFFFFFFFF)  // iOS card white
+private val SEP        = Color(0xFFE5E5EA)  // iOS separator
+private val LABEL      = Color(0xFF1C1C1E)  // iOS label (near-black)
+private val LABEL2     = Color(0xFF6D6D72)  // iOS secondaryLabel
+private val IOS_BLUE   = Color(0xFF007AFF)
+private val IOS_GREEN  = Color(0xFF34C759)
+private val IOS_RED    = Color(0xFFFF3B30)
+private val IOS_ORANGE = Color(0xFFFF9500)
+private val IOS_PURPLE = Color(0xFF5856D6)
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             DispatchListenerTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
+                Surface(modifier = Modifier.fillMaxSize(), color = BG) {
                     MainScreen()
                 }
             }
@@ -118,7 +134,17 @@ fun parseReserveTime(orderText: String): String? {
         ?.let { timeRegex.find(it)?.value }
 }
 
-// 非台中縣市的關鍵字 → 縣市前綴（派單第一欄的地區名）
+fun hasPlateNumber(text: String): Boolean {
+    val lines = text.trim().split("\n")
+    val firstLine = lines.firstOrNull() ?: return false
+    val fullPattern = Regex("""^\d{4}[\s/]|[A-Z]{2,3}-\d{3,4}|\d{3,4}-[A-Z]{2,3}""")
+    if (fullPattern.containsMatchIn(firstLine)) return true
+    val segPlate = Regex("""^\d{4}[^\d/]""")
+    if (firstLine.split("/").any { seg -> segPlate.containsMatchIn(seg.trim()) }) return true
+    // 多行訊息第二行起若有車牌格式，判定為司機回報（例：「7666黑 賓士」）
+    return lines.drop(1).any { line -> segPlate.containsMatchIn(line.trim()) }
+}
+
 private val outOfTcAreaMap = mapOf(
     "彰化" to "彰化縣",
     "伸港" to "彰化縣伸港鄉",
@@ -132,10 +158,27 @@ fun buildDestination(address: String, raw: String = ""): String {
         "后里","神岡","潭子","大雅","新社","石岡","東勢","和平","烏日","大肚","龍井","霧峰",
         "外埔","大安","中區","東區","西區","南區","北區")
 
-    // 地址本身已含縣市資訊，直接用
     if (address.contains("市") || address.contains("縣")) return address
 
-    // 從訂單第一欄（地區）判斷是否為非台中縣市
+    // 常見地標直接對應（高鐵、火車站等不帶路名的目的地）
+    val landmarks = mapOf(
+        "台中高鐵" to "台灣高速鐵路台中站",
+        "烏日高鐵" to "台灣高速鐵路台中站",
+        "高鐵" to "台灣高速鐵路台中站",
+        "台中火車站" to "台中火車站",
+        "火車站" to "台中火車站",
+        "清泉崗" to "台中清泉崗機場",
+        "機場" to "台中清泉崗機場",
+        "台中港" to "台中港",
+        "台中客運" to "台中客運轉運站"
+    )
+    for ((lm, full) in landmarks) {
+        if (address.contains(lm)) {
+            android.util.Log.d("DispatchDest", "地標對應：$full（原始：$address）")
+            return full
+        }
+    }
+
     val areaHint = raw.split("/").firstOrNull()?.trim() ?: ""
     for ((keyword, prefix) in outOfTcAreaMap) {
         if (areaHint.contains(keyword) || address.contains(keyword)) {
@@ -146,7 +189,6 @@ fun buildDestination(address: String, raw: String = ""): String {
         }
     }
 
-    // 台中各區（中區/東區/西區/南區/北區本身已有「區」字，不重複補）
     for (d in tcDistricts) {
         if (address.startsWith(d) && !address.startsWith(d + "區")) {
             val districtFull = if (d.endsWith("區")) "台中市$d" else "台中市${d}區"
@@ -178,10 +220,15 @@ fun convertChineseNum(str: String): String {
 suspend fun getRouteMinutes(originLat: Double, originLon: Double, destination: String, raw: String = ""): Int? {
     return withContext(Dispatchers.IO) {
         try {
-            val dest = convertChineseNum(buildDestination(destination, raw))
+            val gpsCoord = parseGpsCoord(raw)
+            val destEncoded = if (gpsCoord != null) {
+                encode(gpsCoord)  // 直接用 GPS 座標，不經過 buildDestination
+            } else {
+                encode(convertChineseNum(buildDestination(destination, raw)))
+            }
             val url = "https://maps.googleapis.com/maps/api/distancematrix/json" +
                     "?origins=${encode("$originLat,$originLon")}" +
-                    "&destinations=${encode(dest)}" +
+                    "&destinations=$destEncoded" +
                     "&mode=driving" +
                     "&language=zh-TW" +
                     "&key=$MAPS_API_KEY"
@@ -192,9 +239,7 @@ suspend fun getRouteMinutes(originLat: Double, originLon: Double, destination: S
                 .getJSONArray("elements").getJSONObject(0)
             if (element.getString("status") != "OK") return@withContext null
             val seconds = element.getJSONObject("duration").getInt("value")
-            val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
-            val buffer = if ((hour in 7..8) || (hour in 17..18)) 2 else 0
-            (seconds / 60) + buffer
+            maxOf(seconds / 60 + 2, 7)
         } catch (e: Exception) {
             android.util.Log.e("DispatchAPI", "error: ${e.message}", e)
             null
@@ -203,6 +248,19 @@ suspend fun getRouteMinutes(originLat: Double, originLon: Double, destination: S
 }
 
 fun encode(s: String) = java.net.URLEncoder.encode(s, "UTF-8")
+
+// 解析 DMS 格式 GPS 座標（如 24°06'38.3"N 120°40'11.7"E），回傳 "lat,lon" 十進位字串
+fun parseGpsCoord(text: String): String? {
+    val re = Regex("""(\d+)°(\d+)'([\d.]+)"([NS])\s+(\d+)°(\d+)'([\d.]+)"([EW])""")
+    val m = re.find(text) ?: return null
+    val g = m.groupValues
+    val lat = g[1].toDouble() + g[2].toDouble() / 60 + g[3].toDouble() / 3600
+    val lon = g[5].toDouble() + g[6].toDouble() / 60 + g[7].toDouble() / 3600
+    return "%.6f,%.6f".format(
+        if (g[4] == "S") -lat else lat,
+        if (g[8] == "W") -lon else lon
+    )
+}
 
 fun buildReport(orderText: String, mins: Int?, reserveTime: String?): String {
     val firstLine = orderText.trim()
@@ -251,7 +309,6 @@ fun MainScreen() {
         if (!granted) locationLabel = "需要定位權限"
     }
 
-    // 持續定位：app 開著就每 4 秒自動更新
     DisposableEffect(fusedLocationClient) {
         val callback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
@@ -285,7 +342,6 @@ fun MainScreen() {
         }
     }
 
-    // 超過 30 分鐘的舊單自動清除
     LaunchedEffect(Unit) {
         while (true) {
             kotlinx.coroutines.delay(60_000L)
@@ -300,7 +356,6 @@ fun MainScreen() {
         }
     }
 
-    // 自動計算：GPS 或訂單任一更新就重新觸發
     LaunchedEffect(Unit) {
         var lastRecalcLat: Double? = null
         var lastRecalcLon: Double? = null
@@ -310,7 +365,6 @@ fun MainScreen() {
             if (lat == null) return@collect
             val lon = currentLon ?: return@collect
 
-            // 新單初次計算
             orderList.filter { it.status == OrderStatus.CALCULATING && it.id !in dispatchedIds }
                 .forEach { order ->
                     dispatchedIds.add(order.id)
@@ -319,7 +373,9 @@ fun MainScreen() {
                             OrderQueue.update(order.id, null, OrderStatus.FAILED, "")
                             return@launch
                         }
-                        val resolvedDest = convertChineseNum(buildDestination(order.address, order.raw))
+                        val gpsCoord = parseGpsCoord(order.raw)
+                        val resolvedDest = if (gpsCoord != null) "GPS $gpsCoord"
+                            else convertChineseNum(buildDestination(order.address, order.raw))
                         val rawMins = getRouteMinutes(lat, lon, order.address, order.raw)
                         val mins = if (rawMins != null && rawMins <= 1) 3 else rawMins
                         val report = buildReport(order.raw, mins, order.reserveTime)
@@ -328,7 +384,6 @@ fun MainScreen() {
                     }
                 }
 
-            // 已完成的單：定位移動超過 100 公尺或超過 60 秒就重算
             val doneOrders = orderList.filter { it.status == OrderStatus.DONE && it.address != null }
             if (doneOrders.isEmpty()) return@collect
 
@@ -349,7 +404,9 @@ fun MainScreen() {
                         val mins = if (rawMins != null && rawMins <= 1) 3 else rawMins
                         if (mins != null) {
                             val report = buildReport(order.raw, mins, order.reserveTime)
-                            val resolvedDest = convertChineseNum(buildDestination(order.address, order.raw))
+                            val gpsCoord2 = parseGpsCoord(order.raw)
+                            val resolvedDest = if (gpsCoord2 != null) "GPS $gpsCoord2"
+                                else convertChineseNum(buildDestination(order.address!!, order.raw))
                             OrderQueue.update(order.id, mins, OrderStatus.DONE, report, resolvedDest)
                         }
                     }
@@ -360,15 +417,30 @@ fun MainScreen() {
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        // 標題
         item {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.Bottom
             ) {
-                Text("🚗 派車監聽器", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                Column {
+                    Text(
+                        "⚡ 閃報",
+                        fontSize = 34.sp,
+                        fontWeight = FontWeight.Black,
+                        color = LABEL,
+                        letterSpacing = (-1).sp
+                    )
+                    Text(
+                        "HC 調度系統 · 台中",
+                        fontSize = 12.sp,
+                        color = LABEL2,
+                        letterSpacing = 0.5.sp
+                    )
+                }
                 if (orders.isNotEmpty()) {
                     TextButton(onClick = {
                         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
@@ -376,30 +448,41 @@ fun MainScreen() {
                         OrderQueue.clear()
                         dispatchedIds.clear()
                     }) {
-                        Text("清除全部", color = Color.Gray)
+                        Text("清除全部", color = IOS_RED, fontSize = 14.sp)
                     }
                 }
             }
         }
 
-        // 監聽狀態
+        // 通知監聽狀態
         item {
-            Card(colors = CardDefaults.cardColors(
-                containerColor = if (isListening) Color(0xFF1B5E20) else Color(0xFFB71C1C)
-            )) {
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = CARD),
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        if (isListening) "✅ 監聽中" else "❌ 尚未授權",
-                        color = Color.White, fontWeight = FontWeight.Bold
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Box(modifier = Modifier.size(8.dp).background(
+                            if (isListening) IOS_GREEN else IOS_RED, CircleShape))
+                        Column {
+                            Text("通知監聽", color = LABEL, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                            Text(
+                                if (isListening) "運行中" else "未授權",
+                                color = if (isListening) IOS_GREEN else IOS_RED,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
                     if (!isListening) {
-                        Button(onClick = {
-                            context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-                        }) { Text("去授權") }
+                        TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }) {
+                            Text("前往設定", color = IOS_BLUE, fontSize = 14.sp)
+                        }
                     }
                 }
             }
@@ -407,26 +490,34 @@ fun MainScreen() {
 
         // 無障礙服務狀態
         item {
-            Card(colors = CardDefaults.cardColors(
-                containerColor = if (isAccessibilityEnabled) Color(0xFF1A237E) else Color(0xFF4A148C)
-            )) {
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = CARD),
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        if (isAccessibilityEnabled) "♿ 無障礙：已啟用（LINE 前景也能抓單）"
-                        else "♿ 無障礙：未啟用（在 LINE 內看不到新單）",
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp,
-                        modifier = Modifier.weight(1f)
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.weight(1f)) {
+                        Box(modifier = Modifier.size(8.dp).background(
+                            if (isAccessibilityEnabled) IOS_PURPLE else IOS_ORANGE, CircleShape))
+                        Column {
+                            Text("前景掃描", color = LABEL, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                            Text(
+                                if (isAccessibilityEnabled) "已啟用" else "未啟用，LINE 內看不到新單",
+                                color = if (isAccessibilityEnabled) IOS_PURPLE else IOS_ORANGE,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
                     if (!isAccessibilityEnabled) {
-                        Button(onClick = {
-                            context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                        }) { Text("去授權") }
+                        TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) {
+                            Text("前往設定", color = IOS_BLUE, fontSize = 14.sp)
+                        }
                     }
                 }
             }
@@ -434,67 +525,139 @@ fun MainScreen() {
 
         // GPS
         item {
-            Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF0D47A1))) {
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = CARD),
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("📍 $locationLabel", color = Color.White, fontSize = 13.sp,
-                        modifier = Modifier.weight(1f))
-                    Text("即時更新", color = Color(0xFF90CAF9), fontSize = 11.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Box(modifier = Modifier.size(8.dp).background(IOS_BLUE, CircleShape))
+                        Column {
+                            Text("定位", color = LABEL, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                            Text(locationLabel, color = LABEL2, fontSize = 12.sp)
+                        }
+                    }
+                    Text("即時更新", color = LABEL2, fontSize = 11.sp, letterSpacing = 0.5.sp)
                 }
             }
         }
 
-        // 設定
+        // 設定（可折疊）
         item {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = groupName,
-                    onValueChange = { groupName = it; LineNotificationService.targetGroupName = it },
-                    label = { Text("監聽群組") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = keywordInput,
-                    onValueChange = {
-                        keywordInput = it
-                        LineNotificationService.keywords = it.split("、", "，", ",")
-                            .map { k -> k.trim() }.filter { k -> k.isNotEmpty() }.toMutableList()
-                    },
-                    label = { Text("觸發關鍵字（用、分隔）") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = allowedSenderInput,
-                    onValueChange = {
-                        allowedSenderInput = it
-                        LineNotificationService.allowedSenders = it.split("、", "，", ",")
-                            .map { s -> s.trim() }.filter { s -> s.isNotEmpty() }.toMutableList()
-                    },
-                    label = { Text("額外允許帳號（用、分隔，空格會忽略）") },
-                    modifier = Modifier.fillMaxWidth()
-                )
+            var expanded by remember { mutableStateOf(false) }
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = CARD),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("設定", color = LABEL, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                        TextButton(onClick = { expanded = !expanded }) {
+                            Text(if (expanded) "收起 ▲" else "展開 ▼", color = IOS_BLUE, fontSize = 13.sp)
+                        }
+                    }
+                    if (expanded) {
+                        val fieldColors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = IOS_BLUE,
+                            unfocusedBorderColor = SEP,
+                            focusedLabelColor = IOS_BLUE,
+                            unfocusedLabelColor = LABEL2,
+                            cursorColor = IOS_BLUE,
+                            focusedTextColor = LABEL,
+                            unfocusedTextColor = LABEL
+                        )
+                        Column(
+                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = groupName,
+                                onValueChange = { groupName = it; LineNotificationService.targetGroupName = it },
+                                label = { Text("監聽群組") },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(10.dp),
+                                colors = fieldColors
+                            )
+                            OutlinedTextField(
+                                value = keywordInput,
+                                onValueChange = {
+                                    keywordInput = it
+                                    LineNotificationService.keywords = it.split("、", "，", ",")
+                                        .map { k -> k.trim() }.filter { k -> k.isNotEmpty() }.toMutableList()
+                                },
+                                label = { Text("觸發關鍵字（用、分隔）") },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(10.dp),
+                                colors = fieldColors
+                            )
+                            OutlinedTextField(
+                                value = allowedSenderInput,
+                                onValueChange = {
+                                    allowedSenderInput = it
+                                    LineNotificationService.allowedSenders = it.split("、", "，", ",")
+                                        .map { s -> s.trim() }.filter { s -> s.isNotEmpty() }.toMutableList()
+                                },
+                                label = { Text("額外允許帳號（用、分隔，空格會忽略）") },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(10.dp),
+                                colors = fieldColors
+                            )
+                        }
+                    }
+                }
             }
         }
 
         // 訂單列表
         if (orders.isEmpty()) {
             item {
-                Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF263238))) {
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = CARD),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     Box(
-                        modifier = Modifier.fillMaxWidth().padding(40.dp),
+                        modifier = Modifier.fillMaxWidth().padding(56.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text("等待派車通知...", color = Color.Gray, fontSize = 16.sp)
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text("📡", fontSize = 28.sp)
+                            Text(
+                                "待命中，掃描頻道",
+                                color = LABEL2,
+                                fontSize = 14.sp,
+                                letterSpacing = 1.sp
+                            )
+                        }
                     }
                 }
             }
         } else {
             item {
-                Text("待處理訂單（${orders.size} 張）",
-                    fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Text(
+                    "待處理　${orders.size}　張",
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 12.sp,
+                    color = LABEL2,
+                    letterSpacing = 1.5.sp,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
             }
             items(orders.sortedBy { it.minutes ?: Int.MAX_VALUE }, key = { it.id }) { order ->
                 OrderCard(order = order, context = context, onDismiss = {
@@ -511,15 +674,21 @@ fun MainScreen() {
 @Composable
 fun OrderCard(order: OrderItem, context: Context, onDismiss: () -> Unit) {
     val isHighValue = order.raw.contains("低消")
-    val cardColor = when {
-        isHighValue -> Color(0xFF1B5E20)
-        order.status == OrderStatus.CALCULATING -> Color(0xFF37474F)
-        order.status == OrderStatus.DONE -> Color(0xFF0D47A1)
-        else -> Color(0xFF4E342E)
+    val cardBg = when {
+        isHighValue -> Color(0xFFFFF8F0)
+        order.status == OrderStatus.FAILED -> Color(0xFFFFF0F0)
+        else -> CARD
     }
+    val etaColor = when {
+        isHighValue -> IOS_ORANGE
+        order.status == OrderStatus.FAILED -> IOS_RED
+        else -> IOS_BLUE
+    }
+    val btnColor = if (isHighValue) IOS_ORANGE else IOS_BLUE
 
     Card(
-        colors = CardDefaults.cardColors(containerColor = cardColor),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = cardBg),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
@@ -537,37 +706,44 @@ fun OrderCard(order: OrderItem, context: Context, onDismiss: () -> Unit) {
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         CircularProgressIndicator(
-                            color = Color.White,
-                            modifier = Modifier.size(18.dp),
+                            color = LABEL2,
+                            modifier = Modifier.size(16.dp),
                             strokeWidth = 2.dp
                         )
-                        Text("計算中...", color = Color.White, fontWeight = FontWeight.Bold)
+                        Text("計算中...", color = LABEL2, fontWeight = FontWeight.Medium, fontSize = 13.sp)
                     }
                     OrderStatus.DONE -> {
                         val lastLine = order.report.split("\n").lastOrNull() ?: ""
                         val label = when (lastLine) {
-                            "準" -> "${order.minutes} 分 · 準 ✅"
-                            "來不及" -> "${order.minutes} 分 · 來不及 ⚠️"
+                            "準" -> "${order.minutes} 分  ·  準 ✅"
+                            "來不及" -> "${order.minutes} 分  ·  來不及 ⚠️"
                             else -> "${order.minutes} 分鐘"
                         }
-                        Text(label, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                        Text(
+                            label,
+                            color = etaColor,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 26.sp,
+                            letterSpacing = (-0.5).sp
+                        )
                     }
-                    OrderStatus.FAILED -> Text("❌ 無法計算", color = Color.White, fontWeight = FontWeight.Bold)
+                    OrderStatus.FAILED -> Text("無法計算路徑", color = IOS_RED,
+                        fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                 }
                 TextButton(onClick = onDismiss) {
-                    Text("✕", color = Color.White, fontSize = 16.sp)
+                    Text("✕", color = LABEL2, fontSize = 18.sp)
                 }
             }
 
             if (order.address != null) {
-                Text("📍 ${order.address}", color = Color(0xFFB0BEC5), fontSize = 13.sp)
+                Text("📍  ${order.address}", color = LABEL, fontWeight = FontWeight.Medium, fontSize = 14.sp)
             }
             if (order.resolvedDest != null) {
-                Text("🗺 ${order.resolvedDest}", color = Color(0xFF4DB6AC), fontSize = 12.sp)
+                Text("🗺  ${order.resolvedDest}", color = IOS_BLUE, fontSize = 13.sp)
             }
 
             val preview = order.raw.take(80) + if (order.raw.length > 80) "…" else ""
-            Text(preview, color = Color(0xFF90A4AE), fontSize = 12.sp)
+            Text(preview, color = LABEL2, fontSize = 12.sp)
 
             if (order.status == OrderStatus.DONE && order.report.isNotEmpty()) {
                 Button(
@@ -579,9 +755,11 @@ fun OrderCard(order: OrderItem, context: Context, onDismiss: () -> Unit) {
                             ?.let { context.startActivity(it) }
                         Toast.makeText(context, "已複製！點 LINE 通知進調度室後長按貼上", Toast.LENGTH_LONG).show()
                     },
+                    colors = ButtonDefaults.buttonColors(containerColor = btnColor),
+                    shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("📋 複製並開啟群組")
+                    Text("📋  複製並開啟群組", fontSize = 13.sp)
                 }
             }
         }
