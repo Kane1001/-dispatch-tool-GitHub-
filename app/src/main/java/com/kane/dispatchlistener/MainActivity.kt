@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -454,96 +455,85 @@ fun MainScreen() {
             }
         }
 
-        // 通知監聽狀態
+        // 狀態列（通知監聽 / 前景掃描 / 定位）
         item {
             Card(
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(containerColor = CARD),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Box(modifier = Modifier.size(8.dp).background(
-                            if (isListening) IOS_GREEN else IOS_RED, CircleShape))
-                        Column {
-                            Text("通知監聽", color = LABEL, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                Column {
+                    // 通知監聽
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 9.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Box(modifier = Modifier.size(7.dp).background(
+                                if (isListening) IOS_GREEN else IOS_RED, CircleShape))
+                            Text("通知監聽", color = LABEL, fontSize = 13.sp)
                             Text(
                                 if (isListening) "運行中" else "未授權",
                                 color = if (isListening) IOS_GREEN else IOS_RED,
                                 fontSize = 12.sp
                             )
                         }
-                    }
-                    if (!isListening) {
-                        TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }) {
-                            Text("前往設定", color = IOS_BLUE, fontSize = 14.sp)
+                        if (!isListening) {
+                            TextButton(
+                                onClick = { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                            ) {
+                                Text("設定", color = IOS_BLUE, fontSize = 12.sp)
+                            }
                         }
                     }
-                }
-            }
-        }
+                    Box(modifier = Modifier.fillMaxWidth().padding(start = 29.dp).height(0.5.dp).background(SEP))
 
-        // 無障礙服務狀態
-        item {
-            Card(
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = CARD),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        modifier = Modifier.weight(1f)) {
-                        Box(modifier = Modifier.size(8.dp).background(
-                            if (isAccessibilityEnabled) IOS_PURPLE else IOS_ORANGE, CircleShape))
-                        Column {
-                            Text("前景掃描", color = LABEL, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                    // 前景掃描
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 9.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)) {
+                            Box(modifier = Modifier.size(7.dp).background(
+                                if (isAccessibilityEnabled) IOS_PURPLE else IOS_ORANGE, CircleShape))
+                            Text("前景掃描", color = LABEL, fontSize = 13.sp)
                             Text(
-                                if (isAccessibilityEnabled) "已啟用" else "未啟用，LINE 內看不到新單",
+                                if (isAccessibilityEnabled) "已啟用" else "未啟用",
                                 color = if (isAccessibilityEnabled) IOS_PURPLE else IOS_ORANGE,
                                 fontSize = 12.sp
                             )
                         }
-                    }
-                    if (!isAccessibilityEnabled) {
-                        TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) {
-                            Text("前往設定", color = IOS_BLUE, fontSize = 14.sp)
+                        if (!isAccessibilityEnabled) {
+                            TextButton(
+                                onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                            ) {
+                                Text("設定", color = IOS_BLUE, fontSize = 12.sp)
+                            }
                         }
                     }
-                }
-            }
-        }
 
-        // GPS
-        item {
-            Card(
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = CARD),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Box(modifier = Modifier.size(8.dp).background(IOS_BLUE, CircleShape))
-                        Column {
-                            Text("定位", color = LABEL, fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                            Text(locationLabel, color = LABEL2, fontSize = 12.sp)
+                    Box(modifier = Modifier.fillMaxWidth().padding(start = 29.dp).height(0.5.dp).background(SEP))
+
+                    // 定位
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 9.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Box(modifier = Modifier.size(7.dp).background(IOS_BLUE, CircleShape))
+                            Text("定位", color = LABEL, fontSize = 13.sp)
                         }
+                        Text(locationLabel, color = LABEL2, fontSize = 12.sp)
                     }
-                    Text("即時更新", color = LABEL2, fontSize = 11.sp, letterSpacing = 0.5.sp)
                 }
             }
         }
