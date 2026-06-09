@@ -239,8 +239,15 @@ suspend fun getRouteMinutes(originLat: Double, originLon: Double, destination: S
                 .getJSONArray("rows").getJSONObject(0)
                 .getJSONArray("elements").getJSONObject(0)
             if (element.getString("status") != "OK") return@withContext null
-            val seconds = element.getJSONObject("duration").getInt("value")
-            maxOf(seconds / 60 + 2, 7)
+            val rawMins = element.getJSONObject("duration").getInt("value") / 60
+            val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+            val isPeak = hour in 7..8 || hour in 17..19  // 07:00-09:00, 17:00-20:00
+            val buffer = when {
+                rawMins < 7 -> 1   // 短程不管尖峰，只加 1
+                isPeak -> 2        // 長程尖峰加 2
+                else -> 0          // 長程離峰不加
+            }
+            rawMins + buffer
         } catch (e: Exception) {
             android.util.Log.e("DispatchAPI", "error: ${e.message}", e)
             null
