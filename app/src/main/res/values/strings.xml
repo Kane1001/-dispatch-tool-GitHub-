@@ -1,4 +1,4 @@
 <resources>
-    <string name="app_name">DispatchListener</string>
+    <string name="app_name">閃報</string>
     <string name="accessibility_description">監聽 LINE 派車群組，在你看 LINE 時也能即時抓到派單</string>
 </resources>

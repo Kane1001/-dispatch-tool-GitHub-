@@ -218,7 +218,7 @@ fun convertChineseNum(str: String): String {
     return result
 }
 
-suspend fun getRouteMinutes(originLat: Double, originLon: Double, destination: String, raw: String = ""): Int? {
+suspend fun getRouteMinutes(originLat: Double, originLon: Double, destination: String, raw: String = ""): Pair<Int, String>? {
     return withContext(Dispatchers.IO) {
         try {
             val gpsCoord = parseGpsCoord(raw)
@@ -231,6 +231,7 @@ suspend fun getRouteMinutes(originLat: Double, originLon: Double, destination: S
                     "?origins=${encode("$originLat,$originLon")}" +
                     "&destinations=$destEncoded" +
                     "&mode=driving" +
+                    "&departure_time=now" +
                     "&language=zh-TW" +
                     "&key=$MAPS_API_KEY"
             val response = OkHttpClient().newCall(Request.Builder().url(url).build()).execute()
@@ -240,14 +241,15 @@ suspend fun getRouteMinutes(originLat: Double, originLon: Double, destination: S
                 .getJSONArray("elements").getJSONObject(0)
             if (element.getString("status") != "OK") return@withContext null
             val rawMins = element.getJSONObject("duration").getInt("value") / 60
+            val distanceText = element.getJSONObject("distance").getString("text")
             val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
-            val isPeak = hour in 7..8 || hour in 17..19  // 07:00-09:00, 17:00-20:00
+            val isPeak = hour in 7..9 || hour in 17..19  // 07:00-10:00, 17:00-20:00
             val buffer = when {
                 rawMins < 7 -> 1   // 短程不管尖峰，只加 1
                 isPeak -> 2        // 長程尖峰加 2
                 else -> 0          // 長程離峰不加
             }
-            rawMins + buffer
+            Pair(rawMins + buffer, distanceText)
         } catch (e: Exception) {
             android.util.Log.e("DispatchAPI", "error: ${e.message}", e)
             null
@@ -384,11 +386,12 @@ fun MainScreen() {
                         val gpsCoord = parseGpsCoord(order.raw)
                         val resolvedDest = if (gpsCoord != null) "GPS $gpsCoord"
                             else convertChineseNum(buildDestination(order.address, order.raw))
-                        val rawMins = getRouteMinutes(lat, lon, order.address, order.raw)
-                        val mins = if (rawMins != null && rawMins <= 1) 3 else rawMins
+                        val result = getRouteMinutes(lat, lon, order.address, order.raw)
+                        val mins = result?.first?.let { if (it <= 1) 3 else it }
+                        val dist = result?.second
                         val report = buildReport(order.raw, mins, order.reserveTime)
                         OrderQueue.update(order.id, mins,
-                            if (mins != null) OrderStatus.DONE else OrderStatus.FAILED, report, resolvedDest)
+                            if (mins != null) OrderStatus.DONE else OrderStatus.FAILED, report, resolvedDest, dist)
                     }
                 }
 
@@ -408,14 +411,15 @@ fun MainScreen() {
                 lastRecalcTime = now
                 doneOrders.forEach { order ->
                     scope.launch {
-                        val rawMins = getRouteMinutes(lat, lon, order.address!!, order.raw)
-                        val mins = if (rawMins != null && rawMins <= 1) 3 else rawMins
+                        val result = getRouteMinutes(lat, lon, order.address!!, order.raw)
+                        val mins = result?.first?.let { if (it <= 1) 3 else it }
+                        val dist = result?.second
                         if (mins != null) {
                             val report = buildReport(order.raw, mins, order.reserveTime)
                             val gpsCoord2 = parseGpsCoord(order.raw)
                             val resolvedDest = if (gpsCoord2 != null) "GPS $gpsCoord2"
                                 else convertChineseNum(buildDestination(order.address!!, order.raw))
-                            OrderQueue.update(order.id, mins, OrderStatus.DONE, report, resolvedDest)
+                            OrderQueue.update(order.id, mins, OrderStatus.DONE, report, resolvedDest, dist)
                         }
                     }
                 }
@@ -462,85 +466,67 @@ fun MainScreen() {
             }
         }
 
-        // 狀態列（通知監聽 / 前景掃描 / 定位）
+        // 狀態列（單行燈號）
         item {
             Card(
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(containerColor = CARD),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column {
-                    // 通知監聽
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 9.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Box(modifier = Modifier.size(7.dp).background(
-                                if (isListening) IOS_GREEN else IOS_RED, CircleShape))
-                            Text("通知監聽", color = LABEL, fontSize = 13.sp)
+                        // 通知監聽燈號
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Box(modifier = Modifier.size(8.dp).background(
+                                if (isListening) IOS_GREEN else Color(0xFFD1D1D6), CircleShape
+                            ))
                             Text(
-                                if (isListening) "運行中" else "未授權",
-                                color = if (isListening) IOS_GREEN else IOS_RED,
-                                fontSize = 12.sp
+                                "通知",
+                                fontSize = 12.sp,
+                                color = if (isListening) LABEL else LABEL2
                             )
+                            if (!isListening) {
+                                TextButton(
+                                    onClick = { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
+                                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                                ) { Text("↗", color = IOS_BLUE, fontSize = 12.sp) }
+                            }
                         }
-                        if (!isListening) {
-                            TextButton(
-                                onClick = { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
-                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                            ) {
-                                Text("設定", color = IOS_BLUE, fontSize = 12.sp)
+
+                        // 前景掃描燈號
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Box(modifier = Modifier.size(8.dp).background(
+                                if (isAccessibilityEnabled) IOS_PURPLE else Color(0xFFD1D1D6), CircleShape
+                            ))
+                            Text(
+                                "前景",
+                                fontSize = 12.sp,
+                                color = if (isAccessibilityEnabled) LABEL else LABEL2
+                            )
+                            if (!isAccessibilityEnabled) {
+                                TextButton(
+                                    onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
+                                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                                ) { Text("↗", color = IOS_BLUE, fontSize = 12.sp) }
                             }
                         }
                     }
-                    Box(modifier = Modifier.fillMaxWidth().padding(start = 29.dp).height(0.5.dp).background(SEP))
-
-                    // 前景掃描
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 9.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.weight(1f)) {
-                            Box(modifier = Modifier.size(7.dp).background(
-                                if (isAccessibilityEnabled) IOS_PURPLE else IOS_ORANGE, CircleShape))
-                            Text("前景掃描", color = LABEL, fontSize = 13.sp)
-                            Text(
-                                if (isAccessibilityEnabled) "已啟用" else "未啟用",
-                                color = if (isAccessibilityEnabled) IOS_PURPLE else IOS_ORANGE,
-                                fontSize = 12.sp
-                            )
-                        }
-                        if (!isAccessibilityEnabled) {
-                            TextButton(
-                                onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
-                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                            ) {
-                                Text("設定", color = IOS_BLUE, fontSize = 12.sp)
-                            }
-                        }
-                    }
-
-                    Box(modifier = Modifier.fillMaxWidth().padding(start = 29.dp).height(0.5.dp).background(SEP))
 
                     // 定位
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 9.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Box(modifier = Modifier.size(7.dp).background(IOS_BLUE, CircleShape))
-                            Text("定位", color = LABEL, fontSize = 13.sp)
-                        }
-                        Text(locationLabel, color = LABEL2, fontSize = 12.sp)
-                    }
+                    Text(locationLabel, color = LABEL2, fontSize = 11.sp)
                 }
             }
         }
@@ -711,18 +697,23 @@ fun OrderCard(order: OrderItem, context: Context, onDismiss: () -> Unit) {
                     }
                     OrderStatus.DONE -> {
                         val lastLine = order.report.split("\n").lastOrNull() ?: ""
-                        val label = when (lastLine) {
+                        val timeLabel = when (lastLine) {
                             "準" -> "${order.minutes} 分  ·  準 ✅"
                             "來不及" -> "${order.minutes} 分  ·  來不及 ⚠️"
                             else -> "${order.minutes} 分鐘"
                         }
-                        Text(
-                            label,
-                            color = etaColor,
-                            fontWeight = FontWeight.Black,
-                            fontSize = 26.sp,
-                            letterSpacing = (-0.5).sp
-                        )
+                        Column {
+                            Text(
+                                timeLabel,
+                                color = etaColor,
+                                fontWeight = FontWeight.Black,
+                                fontSize = 26.sp,
+                                letterSpacing = (-0.5).sp
+                            )
+                            if (order.distance != null) {
+                                Text(order.distance, color = LABEL2, fontSize = 12.sp)
+                            }
+                        }
                     }
                     OrderStatus.FAILED -> Text("無法計算路徑", color = IOS_RED,
                         fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
