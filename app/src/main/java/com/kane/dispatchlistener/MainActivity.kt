@@ -244,7 +244,8 @@ suspend fun getRouteMinutes(originLat: Double, originLon: Double, destination: S
                 .getJSONArray("rows").getJSONObject(0)
                 .getJSONArray("elements").getJSONObject(0)
             if (element.getString("status") != "OK") return@withContext null
-            val rawMins = (element.optJSONObject("duration_in_traffic") ?: element.getJSONObject("duration")).getInt("value") / 60
+            val rawSecs = (element.optJSONObject("duration_in_traffic") ?: element.getJSONObject("duration")).getInt("value")
+            val rawMins = (rawSecs + 59) / 60  // 無條件進位，避免截斷秒數低估
             val distanceText = element.getJSONObject("distance").getString("text")
             val resolvedAddr = root.getJSONArray("destination_addresses").optString(0)
             val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
@@ -252,7 +253,7 @@ suspend fun getRouteMinutes(originLat: Double, originLon: Double, destination: S
             val buffer = when {
                 rawMins < 7 -> 1   // 短程不管尖峰，只加 1
                 isPeak -> 2        // 長程尖峰加 2
-                else -> 0          // 長程離峰不加
+                else -> 1          // 長程離峰 +1（對齊 Tesla 導航）
             }
             Triple(rawMins + buffer, distanceText, resolvedAddr.ifBlank { null })
         } catch (e: Exception) {

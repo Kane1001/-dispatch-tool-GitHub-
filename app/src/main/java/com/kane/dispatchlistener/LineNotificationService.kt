@@ -90,11 +90,15 @@ class LineNotificationService : NotificationListenerService() {
             }
         } else {
             // 單訊息通知
-            val sender = title.substringAfterLast("：")
-            val senderNorm = sender.replace(" ", "")
-            val senderAllowed = sender.contains("調度") ||
-                allowedSenders.any { senderNorm.contains(it.replace(" ", ""), ignoreCase = true) }
-            if (!senderAllowed) return
+            // 已從目標群組通過驗證（fromGroup = true）時不再過濾發送者，由 hasPlateNumber/excludeKeywords 過濾內容
+            // 非群組訊息（fromDispatcher 路徑）才需驗證發送者
+            if (!fromGroup) {
+                val sender = title.substringAfterLast("：")
+                val senderNorm = sender.replace(" ", "")
+                val senderAllowed = sender.contains("調度") ||
+                    allowedSenders.any { senderNorm.contains(it.replace(" ", ""), ignoreCase = true) }
+                if (!senderAllowed) return
+            }
             processMessageText(text, title, chatId, sbn)
         }
     }
