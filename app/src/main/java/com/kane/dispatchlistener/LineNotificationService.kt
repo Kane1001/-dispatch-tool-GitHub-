@@ -19,7 +19,7 @@ class LineNotificationService : NotificationListenerService() {
 
         var targetGroupName = "♒️ʜᴄ海口-𝟔月調度室🏎️"
         var keywords = mutableListOf("西屯", "北屯", "南屯", "中區", "東區", "西區", "南區", "北區", "大里", "太平", "豐原", "高鐵", "彰化", "南投", "草屯", "伸港", "苗栗", "沙鹿", "清水", "大甲", "烏日", "霧峰", "龍井", "梧棲", "潭子", "大雅", "后里", "神岡", "大肚", "外埔", "大安", "東勢")
-        var excludeKeywords = mutableListOf("出發", "已接", "到了", "已到", "抵達", "客上", "⬆️", "🔼", "↑")
+        var excludeKeywords = mutableListOf("出發", "已接", "到了", "已到", "抵達", "客上", "⬆️", "🔼", "↑", "小宇")
         var allowedSenders = mutableListOf("𝓡𝓪𝓽𝓽𝓲✨")
     }
 

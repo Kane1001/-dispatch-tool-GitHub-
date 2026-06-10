@@ -52,6 +52,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.clickable
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -352,6 +353,15 @@ fun MainScreen() {
         }
     }
 
+    // 每 2 秒重新偵測服務授權狀態，確保從設定頁返回後燈號立即更新
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(2_000L)
+            isListening = isNotificationListenerEnabled(context)
+            isAccessibilityEnabled = isAccessibilityServiceEnabled(context)
+        }
+    }
+
     LaunchedEffect(Unit) {
         while (true) {
             kotlinx.coroutines.delay(60_000L)
@@ -405,7 +415,7 @@ fun MainScreen() {
                 result[0]
             } else Float.MAX_VALUE
 
-            if (distanceMoved >= 100f || now - lastRecalcTime >= 60_000L) {
+            if (distanceMoved >= 50f || now - lastRecalcTime >= 30_000L) {
                 lastRecalcLat = lat
                 lastRecalcLon = lon
                 lastRecalcTime = now
@@ -482,10 +492,13 @@ fun MainScreen() {
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        // 通知監聽燈號
+                        // 通知監聽燈號（可點擊跳設定）
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            modifier = Modifier.clickable {
+                                context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                            }
                         ) {
                             Box(modifier = Modifier.size(8.dp).background(
                                 if (isListening) IOS_GREEN else Color(0xFFD1D1D6), CircleShape
@@ -495,18 +508,15 @@ fun MainScreen() {
                                 fontSize = 12.sp,
                                 color = if (isListening) LABEL else LABEL2
                             )
-                            if (!isListening) {
-                                TextButton(
-                                    onClick = { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
-                                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 0.dp)
-                                ) { Text("↗", color = IOS_BLUE, fontSize = 12.sp) }
-                            }
                         }
 
-                        // 前景掃描燈號
+                        // 前景掃描燈號（可點擊跳設定）
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            modifier = Modifier.clickable {
+                                context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                            }
                         ) {
                             Box(modifier = Modifier.size(8.dp).background(
                                 if (isAccessibilityEnabled) IOS_PURPLE else Color(0xFFD1D1D6), CircleShape
@@ -516,12 +526,6 @@ fun MainScreen() {
                                 fontSize = 12.sp,
                                 color = if (isAccessibilityEnabled) LABEL else LABEL2
                             )
-                            if (!isAccessibilityEnabled) {
-                                TextButton(
-                                    onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
-                                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 0.dp)
-                                ) { Text("↗", color = IOS_BLUE, fontSize = 12.sp) }
-                            }
                         }
                     }
 
