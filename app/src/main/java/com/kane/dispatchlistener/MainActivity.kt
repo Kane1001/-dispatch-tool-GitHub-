@@ -147,6 +147,10 @@ fun hasPlateNumber(text: String): Boolean {
     return lines.drop(1).any { line -> segPlate.containsMatchIn(line.trim()) }
 }
 
+private val tcDistricts = listOf("西屯","南屯","北屯","豐原","大里","太平","大甲","清水","沙鹿","梧棲",
+    "后里","神岡","潭子","大雅","新社","石岡","東勢","和平","烏日","大肚","龍井","霧峰",
+    "外埔","大安","中區","東區","西區","南區","北區")
+
 private val outOfTcAreaMap = mapOf(
     "彰化" to "彰化縣",
     "伸港" to "彰化縣伸港鄉",
@@ -156,9 +160,6 @@ private val outOfTcAreaMap = mapOf(
 )
 
 fun buildDestination(address: String, raw: String = ""): String {
-    val tcDistricts = listOf("西屯","南屯","北屯","豐原","大里","太平","大甲","清水","沙鹿","梧棲",
-        "后里","神岡","潭子","大雅","新社","石岡","東勢","和平","烏日","大肚","龍井","霧峰",
-        "外埔","大安","中區","東區","西區","南區","北區")
 
     if (address.contains("市") || address.contains("縣")) return address
 
@@ -219,7 +220,8 @@ fun convertChineseNum(str: String): String {
     return result
 }
 
-suspend fun getRouteMinutes(originLat: Double, originLon: Double, destination: String, raw: String = ""): Pair<Int, String>? {
+// 回傳 Triple：(分鐘, 距離文字, Google 解析後的目的地地址)
+suspend fun getRouteMinutes(originLat: Double, originLon: Double, destination: String, raw: String = ""): Triple<Int, String, String?>? {
     return withContext(Dispatchers.IO) {
         try {
             val gpsCoord = parseGpsCoord(raw)
@@ -237,12 +239,14 @@ suspend fun getRouteMinutes(originLat: Double, originLon: Double, destination: S
                     "&key=$MAPS_API_KEY"
             val response = OkHttpClient().newCall(Request.Builder().url(url).build()).execute()
             val body = response.body?.string() ?: return@withContext null
-            val element = JSONObject(body)
+            val root = JSONObject(body)
+            val element = root
                 .getJSONArray("rows").getJSONObject(0)
                 .getJSONArray("elements").getJSONObject(0)
             if (element.getString("status") != "OK") return@withContext null
-            val rawMins = element.getJSONObject("duration").getInt("value") / 60
+            val rawMins = (element.optJSONObject("duration_in_traffic") ?: element.getJSONObject("duration")).getInt("value") / 60
             val distanceText = element.getJSONObject("distance").getString("text")
+            val resolvedAddr = root.getJSONArray("destination_addresses").optString(0)
             val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
             val isPeak = hour in 7..9 || hour in 17..19  // 07:00-10:00, 17:00-20:00
             val buffer = when {
@@ -250,7 +254,7 @@ suspend fun getRouteMinutes(originLat: Double, originLon: Double, destination: S
                 isPeak -> 2        // 長程尖峰加 2
                 else -> 0          // 長程離峰不加
             }
-            Pair(rawMins + buffer, distanceText)
+            Triple(rawMins + buffer, distanceText, resolvedAddr.ifBlank { null })
         } catch (e: Exception) {
             android.util.Log.e("DispatchAPI", "error: ${e.message}", e)
             null
@@ -273,7 +277,7 @@ fun parseGpsCoord(text: String): String? {
     )
 }
 
-fun buildReport(orderText: String, mins: Int?, reserveTime: String?): String {
+fun buildReport(orderText: String, mins: Int?, reserveTime: String?, resolvedDest: String? = null, googleAddr: String? = null): String {
     val firstLine = orderText.trim()
     val line3 = when {
         mins == null -> "報單"
@@ -293,7 +297,15 @@ fun buildReport(orderText: String, mins: Int?, reserveTime: String?): String {
         }
         else -> "$mins"
     }
-    return "$firstLine\n8392 白Tesla 3\n$line3"
+    // 地址沒有區名時，從 Google 回傳的地址萃取實際導航區域，附在報單最後作為責任依據
+    val addressHasDistrict = resolvedDest != null &&
+        (tcDistricts.any { resolvedDest.contains(it) } || outOfTcAreaMap.values.any { resolvedDest.contains(it) })
+    val districtSuffix = if (!addressHasDistrict && googleAddr != null) {
+        val matched = tcDistricts.firstOrNull { googleAddr.contains(it) }
+            ?: outOfTcAreaMap.values.firstOrNull { googleAddr.contains(it) }
+        if (matched != null) "\n導航：$matched" else ""
+    } else ""
+    return "$firstLine\n8392 白Tesla 3\n$line3$districtSuffix"
 }
 
 @Composable
@@ -399,7 +411,8 @@ fun MainScreen() {
                         val result = getRouteMinutes(lat, lon, order.address, order.raw)
                         val mins = result?.first?.let { if (it <= 1) 3 else it }
                         val dist = result?.second
-                        val report = buildReport(order.raw, mins, order.reserveTime)
+                        val googleAddr = result?.third
+                        val report = buildReport(order.raw, mins, order.reserveTime, resolvedDest, googleAddr)
                         OrderQueue.update(order.id, mins,
                             if (mins != null) OrderStatus.DONE else OrderStatus.FAILED, report, resolvedDest, dist)
                     }
@@ -424,11 +437,12 @@ fun MainScreen() {
                         val result = getRouteMinutes(lat, lon, order.address!!, order.raw)
                         val mins = result?.first?.let { if (it <= 1) 3 else it }
                         val dist = result?.second
+                        val googleAddr = result?.third
                         if (mins != null) {
-                            val report = buildReport(order.raw, mins, order.reserveTime)
                             val gpsCoord2 = parseGpsCoord(order.raw)
                             val resolvedDest = if (gpsCoord2 != null) "GPS $gpsCoord2"
                                 else convertChineseNum(buildDestination(order.address!!, order.raw))
+                            val report = buildReport(order.raw, mins, order.reserveTime, resolvedDest, googleAddr)
                             OrderQueue.update(order.id, mins, OrderStatus.DONE, report, resolvedDest, dist)
                         }
                     }
@@ -731,7 +745,14 @@ fun OrderCard(order: OrderItem, context: Context, onDismiss: () -> Unit) {
                 Text("📍  ${order.address}", color = LABEL, fontWeight = FontWeight.Medium, fontSize = 14.sp)
             }
             if (order.resolvedDest != null) {
-                Text("🗺  ${order.resolvedDest}", color = IOS_BLUE, fontSize = 13.sp)
+                val hasDistrict = tcDistricts.any { order.resolvedDest.contains(it) } ||
+                    outOfTcAreaMap.values.any { order.resolvedDest.contains(it) }
+                Text(
+                    if (hasDistrict) "🗺  ${order.resolvedDest}"
+                    else "⚠️  ${order.resolvedDest}（未含區名，請確認）",
+                    color = if (hasDistrict) IOS_BLUE else IOS_ORANGE,
+                    fontSize = 13.sp
+                )
             }
 
             val preview = order.raw.take(80) + if (order.raw.length > 80) "…" else ""
