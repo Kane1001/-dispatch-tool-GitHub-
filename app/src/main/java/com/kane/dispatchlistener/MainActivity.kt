@@ -299,11 +299,14 @@ fun buildReport(orderText: String, mins: Int?, reserveTime: String?, resolvedDes
         else -> "$mins"
     }
     // 地址沒有區名時，從 Google 回傳的地址萃取實際導航區域，附在報單最後作為責任依據
+    // 只對街道地址（含路/街/巷/弄/號）做此標註；命名地點（全家、超商等）Google 能準確定位，不需要
+    val isStreetAddress = resolvedDest?.contains(Regex("[路街道巷弄號]")) == true
     val addressHasDistrict = resolvedDest != null &&
         (tcDistricts.any { resolvedDest.contains(it) } || outOfTcAreaMap.values.any { resolvedDest.contains(it) })
-    val districtSuffix = if (!addressHasDistrict && googleAddr != null) {
+    val districtSuffix = if (isStreetAddress && !addressHasDistrict && googleAddr != null) {
         val matched = tcDistricts.firstOrNull { googleAddr.contains(it) }
             ?: outOfTcAreaMap.values.firstOrNull { googleAddr.contains(it) }
+            ?: Regex("[市縣](.{1,5}?[區鄉鎮])").find(googleAddr)?.groupValues?.getOrNull(1)
         if (matched != null) "\n導航：$matched" else ""
     } else ""
     return "$firstLine\n8392 白Tesla 3\n$line3$districtSuffix"
@@ -715,8 +718,9 @@ fun OrderCard(order: OrderItem, context: Context, onDismiss: () -> Unit) {
                         Text("計算中...", color = LABEL2, fontWeight = FontWeight.Medium, fontSize = 13.sp)
                     }
                     OrderStatus.DONE -> {
-                        val lastLine = order.report.split("\n").lastOrNull() ?: ""
-                        val timeLabel = when (lastLine) {
+                        val reportLines = order.report.split("\n")
+                        val verdict = reportLines.firstOrNull { it == "準" || it == "來不及" }
+                        val timeLabel = when (verdict) {
                             "準" -> "${order.minutes} 分  ·  準 ✅"
                             "來不及" -> "${order.minutes} 分  ·  來不及 ⚠️"
                             else -> "${order.minutes} 分鐘"
@@ -748,10 +752,11 @@ fun OrderCard(order: OrderItem, context: Context, onDismiss: () -> Unit) {
             if (order.resolvedDest != null) {
                 val hasDistrict = tcDistricts.any { order.resolvedDest.contains(it) } ||
                     outOfTcAreaMap.values.any { order.resolvedDest.contains(it) }
+                val isStreet = order.resolvedDest.contains(Regex("[路街道巷弄號]"))
                 Text(
-                    if (hasDistrict) "🗺  ${order.resolvedDest}"
+                    if (hasDistrict || !isStreet) "🗺  ${order.resolvedDest}"
                     else "⚠️  ${order.resolvedDest}（未含區名，請確認）",
-                    color = if (hasDistrict) IOS_BLUE else IOS_ORANGE,
+                    color = if (hasDistrict || !isStreet) IOS_BLUE else IOS_ORANGE,
                     fontSize = 13.sp
                 )
             }
