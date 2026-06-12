@@ -120,24 +120,49 @@ class LineNotificationService : NotificationListenerService() {
             return
         }
 
+        // LINE 有時把近幾則訊息（派單＋他人回覆）捆成一個通知送出
+        // 若 text 為多行且其中一行含派單符號，只取那行；但同時檢查其他行有無「已被接走」信號
+        val dispatchLine = if (text.contains("\n"))
+            text.lines().firstOrNull { it.contains("♒️") || it.contains("🏵️") }
+        else null
+        val effectiveText = dispatchLine ?: text
+
+        // 多行捆包：若其他行含車牌或接客關鍵字，代表此單已被接走，跳過
+        if (dispatchLine != null) {
+            val otherLines = text.lines().filter { !it.contains("♒️") && !it.contains("🏵️") }
+            val platePattern = Regex("""^\d{4}[^\d/]""")
+            val alreadyTaken = otherLines.any { line ->
+                platePattern.containsMatchIn(line.trim()) ||
+                excludeKeywords.any { kw -> line.contains(kw) }
+            }
+            if (alreadyTaken) {
+                Log.d("LineNotify", "捆包通知：其他行顯示此單已被接走，跳過")
+                return
+            }
+        }
+
         // 5 分鐘內相同訂單文字不重複處理（只對一般訊息生效）
-        val lastSeen = processedTexts[text] ?: 0L
+        val lastSeen = processedTexts[effectiveText] ?: 0L
         if (now - lastSeen < 300_000) return
-        processedTexts[text] = now
+        processedTexts[effectiveText] = now
 
-        if (excludeKeywords.any { text.contains(it) }) return
-        if (hasPlateNumber(text)) return
+        if (excludeKeywords.any { effectiveText.contains(it) }) return
+        if (hasPlateNumber(effectiveText)) return
 
-        val lastField = text.split("/").lastOrNull()?.trim() ?: ""
+        val lastField = effectiveText.split("/").lastOrNull()?.trim() ?: ""
         if (lastField == "到" || lastField == "到了" || lastField == "已到" || lastField == "抵達") return
 
-        val matched = keywords.any { text.contains(it) } ||
-                      (text.contains("/") && parseAddress(text) != null)
+        // 派單格式必須含有派單符號（♒️/🏵️），避免非派單訊息被誤抓
+        val hasDispatchMarker = effectiveText.contains("♒️") || effectiveText.contains("🏵️")
+        if (!hasDispatchMarker) return
+
+        val matched = keywords.any { effectiveText.contains(it) } ||
+                      (effectiveText.contains("/") && parseAddress(effectiveText) != null)
         if (!matched) return
 
-        Log.d("LineNotify", "派單加入隊列：$text")
-        OrderQueue.add(text, chatId, sbn.notification.contentIntent)
-        showAlert(title, text)
+        Log.d("LineNotify", "派單加入隊列：$effectiveText")
+        OrderQueue.add(effectiveText, chatId, sbn.notification.contentIntent)
+        showAlert(title, effectiveText)
     }
 
     private fun showAlert(title: String, text: String) {

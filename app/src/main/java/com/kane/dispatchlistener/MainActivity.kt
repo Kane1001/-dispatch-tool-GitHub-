@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -220,13 +221,14 @@ fun convertChineseNum(str: String): String {
     return result
 }
 
-// 回傳 Triple：(分鐘, 距離文字, Google 解析後的目的地地址)
-suspend fun getRouteMinutes(originLat: Double, originLon: Double, destination: String, raw: String = ""): Triple<Int, String, String?>? {
+data class RouteResult(val mins: Int, val distance: String, val resolvedAddr: String?, val annotationDistrict: String?)
+
+suspend fun getRouteMinutes(originLat: Double, originLon: Double, destination: String, raw: String = ""): RouteResult? {
     return withContext(Dispatchers.IO) {
         try {
             val gpsCoord = parseGpsCoord(raw)
             val destEncoded = if (gpsCoord != null) {
-                encode(gpsCoord)  // 直接用 GPS 座標，不經過 buildDestination
+                encode(gpsCoord)
             } else {
                 encode(convertChineseNum(buildDestination(destination, raw)))
             }
@@ -245,21 +247,81 @@ suspend fun getRouteMinutes(originLat: Double, originLon: Double, destination: S
                 .getJSONArray("elements").getJSONObject(0)
             if (element.getString("status") != "OK") return@withContext null
             val rawSecs = (element.optJSONObject("duration_in_traffic") ?: element.getJSONObject("duration")).getInt("value")
-            val rawMins = (rawSecs + 59) / 60  // 無條件進位，避免截斷秒數低估
+            val rawMins = (rawSecs + 59) / 60
             val distanceText = element.getJSONObject("distance").getString("text")
             val resolvedAddr = root.getJSONArray("destination_addresses").optString(0)
             val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
-            val isPeak = hour in 7..9 || hour in 17..19  // 07:00-10:00, 17:00-20:00
+            val isPeak = hour in 7..9 || hour in 17..19
             val buffer = when {
-                rawMins < 7 -> 1   // 短程不管尖峰，只加 1
-                isPeak -> 2        // 長程尖峰加 2
-                else -> 1          // 長程離峰 +1（對齊 Tesla 導航）
+                rawMins < 7 -> 1
+                isPeak -> 2
+                else -> 0
             }
-            Triple(rawMins + buffer, distanceText, resolvedAddr.ifBlank { null })
+            val addrHasDistrict = resolvedAddr.isNotBlank() &&
+                (tcDistricts.any { resolvedAddr.contains(it) } ||
+                 outOfTcAreaMap.values.any { resolvedAddr.contains(it) } ||
+                 Regex("[市縣].{1,5}?[區鄉鎮]").containsMatchIn(resolvedAddr))
+            val isStreetDest = destination.contains(Regex("[路街道巷弄號]"))
+
+            var annotationDistrict: String? = null
+            val finalAddr: String?
+            if (!addrHasDistrict && isStreetDest && gpsCoord == null) {
+                val geocoded = geocodeDistrict(convertChineseNum(buildDestination(destination, raw)), originLat, originLon)
+                if (geocoded != null) {
+                    // Geocoding 回傳多筆結果（模糊地址），萃取區名供報單標註
+                    annotationDistrict = tcDistricts.firstOrNull { geocoded.contains(it) }
+                        ?: outOfTcAreaMap.values.firstOrNull { geocoded.contains(it) }
+                        ?: Regex("[市縣](.{1,5}?[區鄉鎮])").find(geocoded)?.groupValues?.getOrNull(1)
+                    finalAddr = geocoded
+                } else {
+                    finalAddr = resolvedAddr.ifBlank { null }
+                }
+            } else {
+                finalAddr = resolvedAddr.ifBlank { null }
+            }
+            android.util.Log.d("DispatchAPI", "resolvedAddr='$resolvedAddr' finalAddr='$finalAddr' annotationDistrict='$annotationDistrict'")
+            RouteResult(rawMins + buffer, distanceText, finalAddr, annotationDistrict)
         } catch (e: Exception) {
             android.util.Log.e("DispatchAPI", "error: ${e.message}", e)
             null
         }
+    }
+}
+
+// Geocoding API 確認地址是否唯一：
+// - 只有一筆結果 → 唯一地址，不需標註，回傳 null
+// - 多筆結果（模糊地址）→ 選離當下位置最近的那筆，回傳其 formatted_address 供標註區域
+suspend fun geocodeDistrict(address: String, originLat: Double, originLon: Double): String? {
+    return withContext(Dispatchers.IO) {
+        try {
+            val url = "https://maps.googleapis.com/maps/api/geocode/json" +
+                "?address=${encode(address)}" +
+                "&language=zh-TW&region=tw" +
+                "&key=$MAPS_API_KEY"
+            val response = OkHttpClient().newCall(Request.Builder().url(url).build()).execute()
+            val body = response.body?.string() ?: return@withContext null
+            val root = JSONObject(body)
+            if (root.getString("status") != "OK") return@withContext null
+            val results = root.getJSONArray("results")
+            if (results.length() <= 1) return@withContext null  // 唯一地址，不加標註
+            // 多筆結果：選離司機當下位置最近的
+            var bestFormatted = results.getJSONObject(0).getString("formatted_address")
+            var bestDistSq = Double.MAX_VALUE
+            for (i in 0 until results.length()) {
+                val loc = results.getJSONObject(i).getJSONObject("geometry").getJSONObject("location")
+                val lat = loc.getDouble("lat")
+                val lng = loc.getDouble("lng")
+                val dlat = lat - originLat
+                val dlng = lng - originLon
+                val distSq = dlat * dlat + dlng * dlng
+                if (distSq < bestDistSq) {
+                    bestDistSq = distSq
+                    bestFormatted = results.getJSONObject(i).getString("formatted_address")
+                }
+            }
+            android.util.Log.d("DispatchAPI", "geocode ambiguous results=${results.length()} nearest='$bestFormatted'")
+            bestFormatted
+        } catch (e: Exception) { null }
     }
 }
 
@@ -278,7 +340,7 @@ fun parseGpsCoord(text: String): String? {
     )
 }
 
-fun buildReport(orderText: String, mins: Int?, reserveTime: String?, resolvedDest: String? = null, googleAddr: String? = null): String {
+fun buildReport(orderText: String, mins: Int?, reserveTime: String?, resolvedDest: String? = null, annotationDistrict: String? = null): String {
     val firstLine = orderText.trim()
     val line3 = when {
         mins == null -> "報單"
@@ -298,17 +360,8 @@ fun buildReport(orderText: String, mins: Int?, reserveTime: String?, resolvedDes
         }
         else -> "$mins"
     }
-    // 地址沒有區名時，從 Google 回傳的地址萃取實際導航區域，附在報單最後作為責任依據
-    // 只對街道地址（含路/街/巷/弄/號）做此標註；命名地點（全家、超商等）Google 能準確定位，不需要
-    val isStreetAddress = resolvedDest?.contains(Regex("[路街道巷弄號]")) == true
-    val addressHasDistrict = resolvedDest != null &&
-        (tcDistricts.any { resolvedDest.contains(it) } || outOfTcAreaMap.values.any { resolvedDest.contains(it) })
-    val districtSuffix = if (isStreetAddress && !addressHasDistrict && googleAddr != null) {
-        val matched = tcDistricts.firstOrNull { googleAddr.contains(it) }
-            ?: outOfTcAreaMap.values.firstOrNull { googleAddr.contains(it) }
-            ?: Regex("[市縣](.{1,5}?[區鄉鎮])").find(googleAddr)?.groupValues?.getOrNull(1)
-        if (matched != null) "\n導航：$matched" else ""
-    } else ""
+    // annotationDistrict 只有在 Geocoding 找到多筆結果（模糊地址）時才非 null
+    val districtSuffix = if (annotationDistrict != null) "\n導航：$annotationDistrict" else ""
     return "$firstLine\n8392 白Tesla 3\n$line3$districtSuffix"
 }
 
@@ -413,16 +466,19 @@ fun MainScreen() {
                         val resolvedDest = if (gpsCoord != null) "GPS $gpsCoord"
                             else convertChineseNum(buildDestination(order.address, order.raw))
                         val result = getRouteMinutes(lat, lon, order.address, order.raw)
-                        val mins = result?.first?.let { if (it <= 1) 3 else it }
-                        val dist = result?.second
-                        val googleAddr = result?.third
-                        val report = buildReport(order.raw, mins, order.reserveTime, resolvedDest, googleAddr)
+                        val mins = result?.mins?.let { if (it <= 1) 3 else it }
+                        val dist = result?.distance
+                        val annotation = result?.annotationDistrict
+                        val report = buildReport(order.raw, mins, order.reserveTime, resolvedDest, annotation)
                         OrderQueue.update(order.id, mins,
-                            if (mins != null) OrderStatus.DONE else OrderStatus.FAILED, report, resolvedDest, dist)
+                            if (mins != null) OrderStatus.DONE else OrderStatus.FAILED, report, resolvedDest, dist, annotation)
                     }
                 }
 
-            val doneOrders = orderList.filter { it.status == OrderStatus.DONE && it.address != null }
+            // DONE + FAILED 都納入定期重算：FAILED 可能是暫時網路問題，重試後補上結果
+            val doneOrders = orderList.filter {
+                (it.status == OrderStatus.DONE || it.status == OrderStatus.FAILED) && it.address != null
+            }
             if (doneOrders.isEmpty()) return@collect
 
             val now = System.currentTimeMillis()
@@ -439,15 +495,15 @@ fun MainScreen() {
                 doneOrders.forEach { order ->
                     scope.launch {
                         val result = getRouteMinutes(lat, lon, order.address!!, order.raw)
-                        val mins = result?.first?.let { if (it <= 1) 3 else it }
-                        val dist = result?.second
-                        val googleAddr = result?.third
+                        val mins = result?.mins?.let { if (it <= 1) 3 else it }
+                        val dist = result?.distance
+                        val annotation = result?.annotationDistrict
                         if (mins != null) {
                             val gpsCoord2 = parseGpsCoord(order.raw)
                             val resolvedDest = if (gpsCoord2 != null) "GPS $gpsCoord2"
                                 else convertChineseNum(buildDestination(order.address!!, order.raw))
-                            val report = buildReport(order.raw, mins, order.reserveTime, resolvedDest, googleAddr)
-                            OrderQueue.update(order.id, mins, OrderStatus.DONE, report, resolvedDest, dist)
+                            val report = buildReport(order.raw, mins, order.reserveTime, resolvedDest, annotation)
+                            OrderQueue.update(order.id, mins, OrderStatus.DONE, report, resolvedDest, dist, annotation)
                         }
                     }
                 }
@@ -457,7 +513,7 @@ fun MainScreen() {
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         // 標題
         item {
@@ -697,8 +753,8 @@ fun OrderCard(order: OrderItem, context: Context, onDismiss: () -> Unit) {
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -712,7 +768,7 @@ fun OrderCard(order: OrderItem, context: Context, onDismiss: () -> Unit) {
                     ) {
                         CircularProgressIndicator(
                             color = LABEL2,
-                            modifier = Modifier.size(16.dp),
+                            modifier = Modifier.size(14.dp),
                             strokeWidth = 2.dp
                         )
                         Text("計算中...", color = LABEL2, fontWeight = FontWeight.Medium, fontSize = 13.sp)
@@ -720,43 +776,39 @@ fun OrderCard(order: OrderItem, context: Context, onDismiss: () -> Unit) {
                     OrderStatus.DONE -> {
                         val reportLines = order.report.split("\n")
                         val verdict = reportLines.firstOrNull { it == "準" || it == "來不及" }
+                        val distPart = if (order.distance != null) "  ·  ${order.distance}" else ""
                         val timeLabel = when (verdict) {
-                            "準" -> "${order.minutes} 分  ·  準 ✅"
-                            "來不及" -> "${order.minutes} 分  ·  來不及 ⚠️"
-                            else -> "${order.minutes} 分鐘"
+                            "準" -> "${order.minutes} 分  ·  準 ✅$distPart"
+                            "來不及" -> "${order.minutes} 分  ·  來不及 ⚠️$distPart"
+                            else -> "${order.minutes} 分鐘$distPart"
                         }
-                        Column {
-                            Text(
-                                timeLabel,
-                                color = etaColor,
-                                fontWeight = FontWeight.Black,
-                                fontSize = 26.sp,
-                                letterSpacing = (-0.5).sp
-                            )
-                            if (order.distance != null) {
-                                Text(order.distance, color = LABEL2, fontSize = 12.sp)
-                            }
-                        }
+                        Text(
+                            timeLabel,
+                            color = etaColor,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 20.sp,
+                            letterSpacing = (-0.5).sp
+                        )
                     }
                     OrderStatus.FAILED -> Text("無法計算路徑", color = IOS_RED,
                         fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                 }
-                TextButton(onClick = onDismiss) {
-                    Text("✕", color = LABEL2, fontSize = 18.sp)
+                TextButton(
+                    onClick = onDismiss,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text("✕", color = LABEL2, fontSize = 16.sp)
                 }
             }
 
             if (order.address != null) {
-                Text("📍  ${order.address}", color = LABEL, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                Text("📍  ${order.address}", color = LABEL, fontWeight = FontWeight.Medium, fontSize = 13.sp)
             }
             if (order.resolvedDest != null) {
-                val hasDistrict = tcDistricts.any { order.resolvedDest.contains(it) } ||
-                    outOfTcAreaMap.values.any { order.resolvedDest.contains(it) }
-                val isStreet = order.resolvedDest.contains(Regex("[路街道巷弄號]"))
                 Text(
-                    if (hasDistrict || !isStreet) "🗺  ${order.resolvedDest}"
-                    else "⚠️  ${order.resolvedDest}（未含區名，請確認）",
-                    color = if (hasDistrict || !isStreet) IOS_BLUE else IOS_ORANGE,
+                    if (order.annotationDistrict != null) "⚠️  ${order.resolvedDest}（導航：${order.annotationDistrict}）"
+                    else "🗺  ${order.resolvedDest}",
+                    color = if (order.annotationDistrict != null) IOS_ORANGE else IOS_BLUE,
                     fontSize = 13.sp
                 )
             }

@@ -4,7 +4,9 @@ import android.app.PendingIntent
 import android.content.Context
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import org.json.JSONArray
+import java.util.concurrent.atomic.AtomicLong
 
 enum class OrderStatus { CALCULATING, DONE, FAILED }
 
@@ -19,12 +21,16 @@ data class OrderItem(
     val distance: String? = null,
     val status: OrderStatus = OrderStatus.CALCULATING,
     val report: String = "",
-    val resolvedDest: String? = null
+    val resolvedDest: String? = null,
+    val annotationDistrict: String? = null
 )
 
 object OrderQueue {
     private val _orders = MutableStateFlow<List<OrderItem>>(emptyList())
     val orders = _orders.asStateFlow()
+
+    // 遞增計數器確保每筆訂單 ID 唯一，避免 LazyColumn duplicate key crash
+    private val idCounter = AtomicLong(System.currentTimeMillis())
 
     // 通知路徑偵測到分隔貼圖時更新，讓無障礙服務同步清除 seenMessages
     @Volatile var lastStickerTime: Long = 0L
@@ -36,30 +42,33 @@ object OrderQueue {
     }
 
     fun add(raw: String, chatId: String? = null, contentIntent: PendingIntent? = null) {
-        val now = System.currentTimeMillis()
+        val id = idCounter.getAndIncrement()
         val parsedAddr = parseAddress(raw)
-        if (_orders.value.any { it.raw == raw }) return
-        val item = OrderItem(
-            id = now,
-            raw = raw,
-            address = parsedAddr,
-            reserveTime = parseReserveTime(raw),
-            chatId = chatId,
-            contentIntent = contentIntent
-        )
-        _orders.value = _orders.value + item
+        _orders.update { current ->
+            if (current.any { it.raw == raw }) return@update current
+            current + OrderItem(
+                id = id,
+                raw = raw,
+                address = parsedAddr,
+                reserveTime = parseReserveTime(raw),
+                chatId = chatId,
+                contentIntent = contentIntent
+            )
+        }
         persist()
     }
 
-    fun update(id: Long, minutes: Int?, status: OrderStatus, report: String, resolvedDest: String? = null, distance: String? = null) {
-        _orders.value = _orders.value.map {
-            if (it.id == id) it.copy(minutes = minutes, distance = distance, status = status, report = report, resolvedDest = resolvedDest)
-            else it
+    fun update(id: Long, minutes: Int?, status: OrderStatus, report: String, resolvedDest: String? = null, distance: String? = null, annotationDistrict: String? = null) {
+        _orders.update { current ->
+            current.map {
+                if (it.id == id) it.copy(minutes = minutes, distance = distance, status = status, report = report, resolvedDest = resolvedDest, annotationDistrict = annotationDistrict)
+                else it
+            }
         }
     }
 
     fun remove(id: Long) {
-        _orders.value = _orders.value.filter { it.id != id }
+        _orders.update { current -> current.filter { it.id != id } }
         persist()
     }
 
@@ -75,10 +84,9 @@ object OrderQueue {
         val arr = try { JSONArray(str) } catch (e: Exception) { return }
         val raws = (0 until arr.length()).mapNotNull { arr.optString(it).takeIf { s -> s.isNotBlank() } }
         if (raws.isEmpty()) return
-        val base = System.currentTimeMillis()
-        _orders.value = raws.mapIndexed { i, raw ->
+        _orders.value = raws.map { raw ->
             OrderItem(
-                id = base - (raws.size - i) * 1000L,
+                id = idCounter.getAndIncrement(),
                 raw = raw,
                 address = parseAddress(raw),
                 reserveTime = parseReserveTime(raw)

@@ -206,7 +206,7 @@ class LineAccessibilityService : AccessibilityService() {
         val results = mutableListOf<String>()
         val excludes = LineNotificationService.excludeKeywords
 
-        // 策略一：地區關鍵字命中
+        // 策略一：地區關鍵字命中（同時要求含派單符號，避免「收北區」等非派單訊息被抓）
         for (keyword in LineNotificationService.keywords) {
             val nodes = root.findAccessibilityNodeInfosByText(keyword)
             for (node in nodes) {
@@ -214,6 +214,8 @@ class LineAccessibilityService : AccessibilityService() {
                 val text = node.text?.toString()?.trim() ?: ""
                 node.recycle()
                 if (editable) continue  // 過濾 LINE 輸入框（未送出的草稿）
+                val hasDispatchMarker = text.contains("♒️") || text.contains("🏵️")
+                if (!hasDispatchMarker) continue
                 // 策略一不要求含「/」：LINE 有時把訊息切成子節點，關鍵字節點的 text 可能只有地名片段
                 if (text.isNotBlank() && parseAddress(text) != null
                     && excludes.none { text.contains(it) } && !isArrivalReport(text)
@@ -223,13 +225,15 @@ class LineAccessibilityService : AccessibilityService() {
             }
         }
 
-        // 策略二：派單格式命中（含「/」+能解析地址），補抓沒有地區關鍵字的單
+        // 策略二：派單格式命中（含「/」+能解析地址+派單符號），補抓沒有地區關鍵字的單
         val slashNodes = root.findAccessibilityNodeInfosByText("/")
         for (node in slashNodes) {
             val editable = node.isEditable
             val text = node.text?.toString()?.trim() ?: ""
             node.recycle()
             if (editable) continue  // 過濾 LINE 輸入框
+            val hasDispatchMarker = text.contains("♒️") || text.contains("🏵️")
+            if (!hasDispatchMarker) continue
             if (text.isNotBlank() && text.contains("/") && parseAddress(text) != null
                 && excludes.none { text.contains(it) } && !isArrivalReport(text)
                 && !hasPlateNumber(text)) {
